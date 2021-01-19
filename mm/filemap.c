@@ -1521,17 +1521,21 @@ EXPORT_SYMBOL(page_cache_prev_miss);
  * swap entry from shmem/tmpfs, it is returned.
  *
  * Return: the found page or shadow entry, %NULL if nothing is found.
+ * 
+ * More Explanation
+ * 	XArray, check the link https://tritum.xyz/doc/html/latest/core-api/xarray.html
+ * 
  */
 struct page *find_get_entry(struct address_space *mapping, pgoff_t offset)
 {
-	XA_STATE(xas, &mapping->i_pages, offset);
+	XA_STATE(xas, &mapping->i_pages, offset);  // Get the XArray operation state ?
 	struct page *page;
 
 	rcu_read_lock();
 repeat:
-	xas_reset(&xas);
+	xas_reset(&xas);   // [?] reset the state before access it ?
 	page = xas_load(&xas);
-	if (xas_retry(&xas, page))
+	if (xas_retry(&xas, page))  // [?] retry immediately ?
 		goto repeat;
 	/*
 	 * A shadow entry of a recently evicted page, or a swap entry from
@@ -1540,7 +1544,7 @@ repeat:
 	if (!page || xa_is_value(page))
 		goto out;
 
-	if (!page_cache_get_speculative(page))
+	if (!page_cache_get_speculative(page))  // [?] speculative ?
 		goto repeat;
 
 	/*
