@@ -248,6 +248,7 @@ static void notrace start_secondary(void *unused)
 	x86_cpuinit.setup_percpu_clockev();
 
 	wmb();
+	init_sw_tlb(false);
 	cpu_startup_entry(CPUHP_ONLINE);
 }
 

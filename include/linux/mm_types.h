@@ -64,6 +64,7 @@ struct page {
 			pgoff_t index;		/* Our offset within mapping. */
 			void *freelist;		/* sl[aou]b first free object */
 			/* page_deferred_list().prev	-- second tail page */
+			epte_t *eptes;		/* extended PTEs */
 		};
 
 		union {
@@ -509,14 +510,29 @@ struct mm_struct {
 #ifdef CONFIG_HUGETLB_PAGE
 	atomic_long_t hugetlb_usage;
 #endif
-};
+	atomic_t flush_cnt;
+	cpumask_var_t cpu_vm_flush_mask_var;
+#ifdef CONFIG_CPUMASK_OFFSTACK
+	struct cpumask cpumask_flush_allocation;
+#endif
+	spinlock_t flush_gen_lock;
+	/* aligned so we can save in the low bit TLB info */
+} __aligned(sizeof(unsigned long));
+
+static inline void mm_init_tlb_gen(struct mm_struct *mm)
+{
+	atomic_set(&mm->flush_cnt, EPTE_GEN_MIN);
+	spin_lock_init(&mm->flush_gen_lock);
+}
 
 static inline void mm_init_cpumask(struct mm_struct *mm)
 {
 #ifdef CONFIG_CPUMASK_OFFSTACK
 	mm->cpu_vm_mask_var = &mm->cpumask_allocation;
+	mm->cpu_vm_flush_mask_var = &mm->cpumask_flush_allocation;
 #endif
 	cpumask_clear(mm->cpu_vm_mask_var);
+	cpumask_clear(mm->cpu_vm_flush_mask_var);
 }
 
 /* Future-safe accessor for struct mm_struct's cpu_vm_mask. */

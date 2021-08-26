@@ -862,13 +862,20 @@ static inline void clear_soft_dirty(struct vm_area_struct *vma,
 	pte_t ptent = *pte;
 
 	if (pte_present(ptent)) {
-		ptent = ptep_modify_prot_start(vma->vm_mm, addr, pte);
+		epte_t epte;
+		pte_t oldpte;
+
+		ptent = eptep_modify_prot_start(vma->vm_mm, addr, pte, &epte);
+		smp_mb__after_atomic();
+		oldpte = ptent;
 		ptent = pte_wrprotect(ptent);
 		ptent = pte_clear_soft_dirty(ptent);
-		ptep_modify_prot_commit(vma->vm_mm, addr, pte, ptent);
+		ptent = epte_mk_reset(vma->vm_mm, ptent, &epte, oldpte, true);
+
+		eptep_modify_prot_commit(vma->vm_mm, addr, pte, ptent, epte);
 	} else if (is_swap_pte(ptent)) {
 		ptent = pte_swp_clear_soft_dirty(ptent);
-		set_pte_at(vma->vm_mm, addr, pte, ptent);
+		set_epte_at(vma->vm_mm, addr, pte, ptent, ZERO_EPTE(0));
 	}
 }
 #else

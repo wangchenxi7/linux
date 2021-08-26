@@ -1201,7 +1201,7 @@ static int do_huge_pmd_wp_page_fallback(struct mm_struct *mm,
 		lru_cache_add_active_or_unevictable(pages[i], vma);
 		pte = pte_offset_map(&_pmd, haddr);
 		VM_BUG_ON(!pte_none(*pte));
-		set_pte_at(mm, haddr, pte, entry);
+		set_epte_at(mm, haddr, pte, entry, ZERO_EPTE(0));
 		pte_unmap(pte);
 	}
 	kfree(pages);
@@ -2110,7 +2110,7 @@ static void __collapse_huge_page_copy(pte_t *pte, struct page *page,
 				 * paravirt calls inside pte_clear here are
 				 * superfluous.
 				 */
-				pte_clear(vma->vm_mm, address, _pte);
+				epte_clear(vma->vm_mm, address, _pte);
 				spin_unlock(ptl);
 			}
 		} else {
@@ -2128,7 +2128,7 @@ static void __collapse_huge_page_copy(pte_t *pte, struct page *page,
 			 * paravirt calls inside pte_clear here are
 			 * superfluous.
 			 */
-			pte_clear(vma->vm_mm, address, _pte);
+			epte_clear(vma->vm_mm, address, _pte);
 			page_remove_rmap(src_page, false);
 			spin_unlock(ptl);
 			free_page_and_swap_cache(src_page);
@@ -2820,7 +2820,7 @@ static void __split_huge_zero_page_pmd(struct vm_area_struct *vma,
 		entry = pte_mkspecial(entry);
 		pte = pte_offset_map(&_pmd, haddr);
 		VM_BUG_ON(!pte_none(*pte));
-		set_pte_at(mm, haddr, pte, entry);
+		set_epte_at(mm, haddr, pte, entry, ZERO_EPTE(0));
 		pte_unmap(pte);
 	}
 	smp_wmb(); /* make pte visible before pmd */
@@ -2889,7 +2889,7 @@ static void __split_huge_pmd_locked(struct vm_area_struct *vma, pmd_t *pmd,
 			SetPageDirty(page + i);
 		pte = pte_offset_map(&_pmd, addr);
 		BUG_ON(!pte_none(*pte));
-		set_pte_at(mm, addr, pte, entry);
+		set_epte_at(mm, addr, pte, entry, ZERO_EPTE(0));
 		atomic_inc(&page[i]._mapcount);
 		pte_unmap(pte);
 	}
@@ -3086,6 +3086,7 @@ static void freeze_page_vma(struct vm_area_struct *vma, struct page *page,
 	pte = pte_offset_map_lock(vma->vm_mm, pmd, address, &ptl);
 	for (i = 0; i < nr; i++, address += PAGE_SIZE, page++, pte++) {
 		pte_t entry, swp_pte;
+		epte_t epte;
 		swp_entry_t swp_entry;
 
 		/*
@@ -3106,14 +3107,14 @@ static void freeze_page_vma(struct vm_area_struct *vma, struct page *page,
 		if (page_to_pfn(page) != pte_pfn(*pte))
 			continue;
 		flush_cache_page(vma, address, page_to_pfn(page));
-		entry = ptep_clear_flush(vma, address, pte);
+		entry = eptep_clear_flush(vma, address, pte, &epte);
 		if (pte_dirty(entry))
 			SetPageDirty(page);
 		swp_entry = make_migration_entry(page, pte_write(entry));
 		swp_pte = swp_entry_to_pte(swp_entry);
 		if (pte_soft_dirty(entry))
 			swp_pte = pte_swp_mksoft_dirty(swp_pte);
-		set_pte_at(vma->vm_mm, address, pte, swp_pte);
+		set_epte_at(vma->vm_mm, address, pte, swp_pte, ZERO_EPTE(0));
 		page_remove_rmap(page, false);
 		put_page(page);
 	}
@@ -3195,7 +3196,7 @@ static void unfreeze_page_vma(struct vm_area_struct *vma, struct page *page,
 			entry = maybe_mkwrite(entry, vma);
 
 		flush_dcache_page(page);
-		set_pte_at(vma->vm_mm, address, pte, entry);
+		set_epte_at(vma->vm_mm, address, pte, entry, ZERO_EPTE(0));
 
 		/* No need to invalidate - it was non-present before */
 		update_mmu_cache(vma, address, pte);

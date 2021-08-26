@@ -48,6 +48,7 @@
 #include <linux/printk.h>
 #include <linux/dax.h>
 
+#include <asm/tlb.h>
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
 
@@ -904,7 +905,9 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 	unsigned long nr_reclaimed = 0;
 	unsigned long nr_writeback = 0;
 	unsigned long nr_immediate = 0;
+	struct tlbflush_unmap_batch tlb_ubc;
 
+	init_tlb_ubc(&tlb_ubc);
 	cond_resched();
 
 	while (!list_empty(page_list)) {
@@ -1072,7 +1075,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		if (page_mapped(page) && mapping) {
 			switch (ret = try_to_unmap(page, lazyfree ?
 				(ttu_flags | TTU_BATCH_FLUSH | TTU_LZFREE) :
-				(ttu_flags | TTU_BATCH_FLUSH))) {
+				(ttu_flags | TTU_BATCH_FLUSH), &tlb_ubc)) {
 			case SWAP_FAIL:
 				goto activate_locked;
 			case SWAP_AGAIN:
@@ -1119,7 +1122,7 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			 * potentially exists to avoid CPU writes after IO
 			 * starts and then write it out here.
 			 */
-			try_to_unmap_flush_dirty();
+			try_to_unmap_flush_dirty(&tlb_ubc);
 			switch (pageout(page, mapping, sc)) {
 			case PAGE_KEEP:
 				goto keep_locked;
@@ -1234,7 +1237,7 @@ keep:
 	}
 
 	mem_cgroup_uncharge_list(&free_pages);
-	try_to_unmap_flush();
+	try_to_unmap_flush(&tlb_ubc);
 	free_hot_cold_page_list(&free_pages, true);
 
 	list_splice(&ret_pages, page_list);
@@ -2182,7 +2185,7 @@ out:
 }
 
 #ifdef CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
-static void init_tlb_ubc(void)
+void init_tlb_ubc(struct tlbflush_unmap_batch *tlb_ubc)
 {
 	/*
 	 * This deliberately does not clear the cpumask as it's expensive
@@ -2190,7 +2193,8 @@ static void init_tlb_ubc(void)
 	 * first SWAP_CLUSTER_MAX pages will send an unnecessary IPI and
 	 * then will be cleared.
 	 */
-	current->tlb_ubc.flush_required = false;
+	tlb_ubc->flush_required = false;
+	__tlb_reset_flush_tlb_info(&tlb_ubc->flush_info.info, false);
 }
 #else
 static inline void init_tlb_ubc(void)
@@ -2232,8 +2236,6 @@ static void shrink_zone_memcg(struct zone *zone, struct mem_cgroup *memcg,
 	 */
 	scan_adjusted = (global_reclaim(sc) && !current_is_kswapd() &&
 			 sc->priority == DEF_PRIORITY);
-
-	init_tlb_ubc();
 
 	blk_start_plug(&plug);
 	while (nr[LRU_INACTIVE_ANON] || nr[LRU_ACTIVE_FILE] ||

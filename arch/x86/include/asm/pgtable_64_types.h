@@ -17,6 +17,22 @@ typedef unsigned long	pgprotval_t;
 
 typedef struct { pteval_t pte; } pte_t;
 
+#define FLUSH_GEN_BITS		(7)
+#define FLUSH_GEN_MASK		((1UL << FLUSH_GEN_BITS) - 1)
+
+#define EPTE_GEN_DISABLED	(0x0)
+#define EPTE_GEN_UNCACHED	(0x1)
+#define EPTE_GEN_MIN		(0x2)
+
+typedef union {
+	struct {
+		unsigned short sw_young : 1;
+		unsigned short generation : FLUSH_GEN_BITS;
+		unsigned short cpu_plus_one : 8;
+	};
+	unsigned short val;
+} epte_t;
+
 #endif	/* !__ASSEMBLY__ */
 
 #define SHARED_KERNEL_PMD	0

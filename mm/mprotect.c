@@ -27,6 +27,7 @@
 #include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/cacheflush.h>
+#include <asm/tlb.h>
 #include <asm/tlbflush.h>
 
 #include "internal.h"
@@ -61,7 +62,7 @@ static pte_t *lock_pte_protection(struct vm_area_struct *vma, pmd_t *pmd,
 
 static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 		unsigned long addr, unsigned long end, pgprot_t newprot,
-		int dirty_accountable, int prot_numa)
+		int dirty_accountable, int prot_numa, struct mmu_gather *tlb)
 {
 	struct mm_struct *mm = vma->vm_mm;
 	pte_t *pte, oldpte;
@@ -77,7 +78,9 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 		oldpte = *pte;
 		if (pte_present(oldpte)) {
 			pte_t ptent;
+			epte_t eptent;
 			bool preserve_write = prot_numa && pte_write(oldpte);
+			int cpu = -1;
 
 			/*
 			 * Avoid trapping faults against the zero or KSM
@@ -95,7 +98,10 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 					continue;
 			}
 
-			ptent = ptep_modify_prot_start(mm, addr, pte);
+			ptent = eptep_modify_prot_start(mm, addr, pte, &eptent);
+			smp_mb__after_atomic();
+
+			oldpte = ptent;
 			ptent = pte_modify(ptent, newprot);
 			if (preserve_write)
 				ptent = pte_mkwrite(ptent);
@@ -106,8 +112,25 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 					 !(vma->vm_flags & VM_SOFTDIRTY))) {
 				ptent = pte_mkwrite(ptent);
 			}
-			ptep_modify_prot_commit(mm, addr, pte, ptent);
-			pages++;
+
+			if (pte_need_flush(mm, oldpte, eptent, &cpu)) {
+				tlb_remove_tlb_entry(tlb, pte, addr, cpu);
+				pages++;
+				/*
+				 * The pte is about to be flushed, yet present.
+				 */
+				ptent = epte_mk_reset(mm, ptent, &eptent,
+						      oldpte, true);
+			} else {
+				/* no need to flush, mark as uncached */
+				ptent = epte_mk_uncached(ptent, &eptent);
+			}
+
+			/*
+			 * This one is tricky: we still did not flush, so we
+			 * cannot use the uncached generation
+			 */
+			eptep_modify_prot_commit(mm, addr, pte, ptent, eptent);
 		} else if (IS_ENABLED(CONFIG_MIGRATION)) {
 			swp_entry_t entry = pte_to_swp_entry(oldpte);
 
@@ -121,7 +144,8 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 				newpte = swp_entry_to_pte(entry);
 				if (pte_swp_soft_dirty(oldpte))
 					newpte = pte_swp_mksoft_dirty(newpte);
-				set_pte_at(mm, addr, pte, newpte);
+				set_epte_at(mm, addr, pte, newpte,
+					    ZERO_EPTE(0));
 
 				pages++;
 			}
@@ -135,7 +159,8 @@ static unsigned long change_pte_range(struct vm_area_struct *vma, pmd_t *pmd,
 
 static inline unsigned long change_pmd_range(struct vm_area_struct *vma,
 		pud_t *pud, unsigned long addr, unsigned long end,
-		pgprot_t newprot, int dirty_accountable, int prot_numa)
+		pgprot_t newprot, int dirty_accountable, int prot_numa,
+		struct mmu_gather *tlb)
 {
 	pmd_t *pmd;
 	struct mm_struct *mm = vma->vm_mm;
@@ -181,7 +206,7 @@ static inline unsigned long change_pmd_range(struct vm_area_struct *vma,
 			/* fall through, the trans huge pmd just split */
 		}
 		this_pages = change_pte_range(vma, pmd, addr, next, newprot,
-				 dirty_accountable, prot_numa);
+				 dirty_accountable, prot_numa, tlb);
 		pages += this_pages;
 	} while (pmd++, addr = next, addr != end);
 
@@ -195,7 +220,8 @@ static inline unsigned long change_pmd_range(struct vm_area_struct *vma,
 
 static inline unsigned long change_pud_range(struct vm_area_struct *vma,
 		pgd_t *pgd, unsigned long addr, unsigned long end,
-		pgprot_t newprot, int dirty_accountable, int prot_numa)
+		pgprot_t newprot, int dirty_accountable, int prot_numa,
+		struct mmu_gather *tlb)
 {
 	pud_t *pud;
 	unsigned long next;
@@ -207,7 +233,7 @@ static inline unsigned long change_pud_range(struct vm_area_struct *vma,
 		if (pud_none_or_clear_bad(pud))
 			continue;
 		pages += change_pmd_range(vma, pud, addr, next, newprot,
-				 dirty_accountable, prot_numa);
+				 dirty_accountable, prot_numa, tlb);
 	} while (pud++, addr = next, addr != end);
 
 	return pages;
@@ -220,24 +246,25 @@ static unsigned long change_protection_range(struct vm_area_struct *vma,
 	struct mm_struct *mm = vma->vm_mm;
 	pgd_t *pgd;
 	unsigned long next;
-	unsigned long start = addr;
 	unsigned long pages = 0;
+	struct mmu_gather tlb;
 
 	BUG_ON(addr >= end);
 	pgd = pgd_offset(mm, addr);
 	flush_cache_range(vma, addr, end);
+	tlb_gather_mmu(&tlb, mm, addr, end);
 	set_tlb_flush_pending(mm);
 	do {
 		next = pgd_addr_end(addr, end);
 		if (pgd_none_or_clear_bad(pgd))
 			continue;
 		pages += change_pud_range(vma, pgd, addr, next, newprot,
-				 dirty_accountable, prot_numa);
+				 dirty_accountable, prot_numa, &tlb);
 	} while (pgd++, addr = next, addr != end);
 
 	/* Only flush the TLB if we actually modified any entries: */
 	if (pages)
-		flush_tlb_range(vma, start, end);
+		tlb_flush_mmu(&tlb);
 	clear_tlb_flush_pending(mm);
 
 	return pages;

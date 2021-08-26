@@ -518,8 +518,30 @@ static int queue_pages_pte_range(pmd_t *pmd, unsigned long addr,
 retry:
 	pte = pte_offset_map_lock(walk->mm, pmd, addr, &ptl);
 	for (; addr != end; pte++, addr += PAGE_SIZE) {
+		epte_t *eptep;
+
 		if (!pte_present(*pte))
 			continue;
+
+		/*
+		 * While at it, remove the young bit, update the generation,
+		 * etc.
+		 */
+		if (pte_young(*pte) && (eptep = get_eptep(pte)) != NULL) {
+			epte_t epte = *eptep;
+
+			if (test_and_clear_bit(_PAGE_BIT_ACCESSED,
+						(unsigned long *)&pte->pte)) {
+				smp_mb__after_atomic();
+				pte_update(walk->mm, addr, pte);
+				epte.cpu_plus_one = 0;
+				epte.sw_young = 1;
+				epte.generation =
+					atomic_read(&walk->mm->flush_cnt);
+				__set_epte(eptep, epte);
+			}
+		}
+
 		page = vm_normal_page(vma, addr, *pte);
 		if (!page)
 			continue;

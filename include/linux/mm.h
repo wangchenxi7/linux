@@ -112,6 +112,9 @@ extern int overcommit_kbytes_handler(struct ctl_table *, int, void __user *,
  */
 
 extern struct kmem_cache *vm_area_cachep;
+extern struct kmem_cache *tlb_info_cachep;
+extern struct kmem_cache *mmu_gather_cachep;
+
 
 #ifndef CONFIG_MMU
 extern struct rb_root nommu_region_tree;
@@ -553,8 +556,9 @@ static inline pte_t maybe_mkwrite(pte_t pte, struct vm_area_struct *vma)
 	return pte;
 }
 
-void do_set_pte(struct vm_area_struct *vma, unsigned long address,
-		struct page *page, pte_t *pte, bool write, bool anon);
+int do_set_pte(struct vm_area_struct *vma, unsigned long address,
+		struct page *page, pte_t *pte, bool write, bool anon,
+		unsigned int flags);
 #endif
 
 /*
@@ -1216,6 +1220,10 @@ static inline int fixup_user_fault(struct task_struct *tsk,
 	return -EFAULT;
 }
 #endif
+
+extern int _handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+			unsigned long *paddress, unsigned int flags,
+			int *nr_ptes);
 
 extern int access_process_vm(struct task_struct *tsk, unsigned long addr, void *buf, int len, int write);
 extern int access_remote_vm(struct mm_struct *mm, unsigned long addr,
@@ -2366,6 +2374,12 @@ void __init setup_nr_node_ids(void);
 #else
 static inline void setup_nr_node_ids(void) {}
 #endif
+
+int init_sw_tlb(bool primary);
+void deinit_sw_tlb(void);
+
+void lockless_push_to_tlb(struct mm_struct *mm, unsigned long addr,
+			  int nr_ptes);
 
 #endif /* __KERNEL__ */
 #endif /* _LINUX_MM_H */

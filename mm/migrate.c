@@ -111,6 +111,7 @@ static int remove_migration_pte(struct page *new, struct vm_area_struct *vma,
  	pmd_t *pmd;
 	pte_t *ptep, pte;
  	spinlock_t *ptl;
+	epte_t epte = ZERO_EPTE(0);
 
 	if (unlikely(PageHuge(new))) {
 		ptep = huge_pte_offset(mm, addr);
@@ -159,7 +160,8 @@ static int remove_migration_pte(struct page *new, struct vm_area_struct *vma,
 	}
 #endif
 	flush_dcache_page(new);
-	set_pte_at(mm, addr, ptep, pte);
+	pte = epte_mk_uncached(pte, &epte);
+	set_epte_at(mm, addr, ptep, pte, epte);
 
 	if (PageHuge(new)) {
 		if (PageAnon(new))
@@ -888,7 +890,8 @@ static int __unmap_and_move(struct page *page, struct page *newpage,
 		VM_BUG_ON_PAGE(PageAnon(page) && !PageKsm(page) && !anon_vma,
 				page);
 		try_to_unmap(page,
-			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS);
+			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS,
+			NULL);
 		page_was_mapped = 1;
 	}
 
@@ -1056,7 +1059,8 @@ static int unmap_and_move_huge_page(new_page_t get_new_page,
 
 	if (page_mapped(hpage)) {
 		try_to_unmap(hpage,
-			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS);
+			TTU_MIGRATION|TTU_IGNORE_MLOCK|TTU_IGNORE_ACCESS,
+			NULL);
 		page_was_mapped = 1;
 	}
 

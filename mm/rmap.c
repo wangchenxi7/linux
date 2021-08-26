@@ -62,6 +62,7 @@
 #include <linux/backing-dev.h>
 #include <linux/page_idle.h>
 
+#include <asm/tlb.h>
 #include <asm/tlbflush.h>
 
 #include <trace/events/tlb.h>
@@ -569,65 +570,36 @@ void page_unlock_anon_vma_read(struct anon_vma *anon_vma)
 }
 
 #ifdef CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
-static void percpu_flush_tlb_batch_pages(void *data)
-{
-	/*
-	 * All TLB entries are flushed on the assumption that it is
-	 * cheaper to flush all TLBs and let them be refilled than
-	 * flushing individual PFNs. Note that we do not track mm's
-	 * to flush as that might simply be multiple full TLB flushes
-	 * for no gain.
-	 */
-	count_vm_tlb_event(NR_TLB_REMOTE_FLUSH_RECEIVED);
-	flush_tlb_local();
-}
-
 /*
  * Flush TLB entries for recently unmapped pages from remote CPUs. It is
  * important if a PTE was dirty when it was unmapped that it's flushed
  * before any IO is initiated on the page to prevent lost writes. Similarly,
  * it must be flushed before freeing to prevent data leakage.
  */
-void try_to_unmap_flush(void)
+void try_to_unmap_flush(struct tlbflush_unmap_batch *tlb_ubc)
 {
-	struct tlbflush_unmap_batch *tlb_ubc = &current->tlb_ubc;
-	int cpu;
-
 	if (!tlb_ubc->flush_required)
 		return;
 
-	cpu = get_cpu();
-
-	trace_tlb_flush(TLB_REMOTE_SHOOTDOWN, -1UL);
-
-	if (cpumask_test_cpu(cpu, &tlb_ubc->cpumask))
-		percpu_flush_tlb_batch_pages(&tlb_ubc->cpumask);
-
-	if (cpumask_any_but(&tlb_ubc->cpumask, cpu) < nr_cpu_ids) {
-		smp_call_function_many(&tlb_ubc->cpumask,
-			percpu_flush_tlb_batch_pages, (void *)tlb_ubc, true);
-	}
-	cpumask_clear(&tlb_ubc->cpumask);
+	flush_tlb_mm_entries(&tlb_ubc->flush_info.info);
 	tlb_ubc->flush_required = false;
 	tlb_ubc->writable = false;
-	put_cpu();
+	__tlb_reset_flush_tlb_info(&tlb_ubc->flush_info.info, false);
 }
 
 /* Flush iff there are potentially writable TLB entries that can race with IO */
-void try_to_unmap_flush_dirty(void)
+void try_to_unmap_flush_dirty(struct tlbflush_unmap_batch *tlb_ubc)
 {
-	struct tlbflush_unmap_batch *tlb_ubc = &current->tlb_ubc;
-
 	if (tlb_ubc->writable)
-		try_to_unmap_flush();
+		try_to_unmap_flush(tlb_ubc);
 }
 
 static void set_tlb_ubc_flush_pending(struct mm_struct *mm,
-		struct page *page, bool writable)
+		unsigned long address, bool writable,
+		struct tlbflush_unmap_batch *tlb_ubc, int cpu)
 {
-	struct tlbflush_unmap_batch *tlb_ubc = &current->tlb_ubc;
+	struct flush_tlb_info *info = &tlb_ubc->flush_info.info;
 
-	cpumask_or(&tlb_ubc->cpumask, &tlb_ubc->cpumask, mm_cpumask(mm));
 	tlb_ubc->flush_required = true;
 
 	/*
@@ -637,6 +609,8 @@ static void set_tlb_ubc_flush_pending(struct mm_struct *mm,
 	 */
 	if (writable)
 		tlb_ubc->writable = true;
+
+	tlb_add_flush_range(info, mm, address, cpu);
 }
 
 /*
@@ -659,7 +633,9 @@ static bool should_defer_flush(struct mm_struct *mm, enum ttu_flags flags)
 }
 #else
 static void set_tlb_ubc_flush_pending(struct mm_struct *mm,
-		struct page *page, bool writable)
+		unsigned long address, bool writable,
+		struct tlbflush_unmap_batch *tlb_ubc,
+		int cpu)
 {
 }
 
@@ -1032,6 +1008,7 @@ static int page_mkclean_one(struct page *page, struct vm_area_struct *vma,
 {
 	struct mm_struct *mm = vma->vm_mm;
 	pte_t *pte;
+	epte_t epte;
 	spinlock_t *ptl;
 	int ret = 0;
 	int *cleaned = arg;
@@ -1044,10 +1021,13 @@ static int page_mkclean_one(struct page *page, struct vm_area_struct *vma,
 		pte_t entry;
 
 		flush_cache_page(vma, address, pte_pfn(*pte));
-		entry = ptep_clear_flush(vma, address, pte);
+		entry = eptep_clear_flush(vma, address, pte, &epte);
 		entry = pte_wrprotect(entry);
 		entry = pte_mkclean(entry);
-		set_pte_at(mm, address, pte, entry);
+		entry = epte_mk_uncached(entry, &epte);
+
+		set_epte_at(mm, address, pte, entry, epte);
+
 		ret = 1;
 	}
 
@@ -1415,6 +1395,7 @@ void page_remove_rmap(struct page *page, bool compound)
 struct rmap_private {
 	enum ttu_flags flags;
 	int lazyfreed;
+	struct tlbflush_unmap_batch *tlb_ubc;
 };
 
 /*
@@ -1430,6 +1411,8 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 	int ret = SWAP_AGAIN;
 	struct rmap_private *rp = arg;
 	enum ttu_flags flags = rp->flags;
+	struct tlbflush_unmap_batch *tlb_ubc = rp->tlb_ubc;
+	epte_t epte;
 
 	/* munlock has nothing to gain from examining un-locked vmas */
 	if ((flags & TTU_MUNLOCK) && !(vma->vm_flags & VM_LOCKED))
@@ -1464,6 +1447,9 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 	/* Nuke the page table entry. */
 	flush_cache_page(vma, address, page_to_pfn(page));
 	if (should_defer_flush(mm, flags)) {
+		int cpu = -1;
+
+
 		/*
 		 * We clear the PTE but do not flush so potentially a remote
 		 * CPU could still be writing to the page. If the entry was
@@ -1471,11 +1457,17 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		 * a clear->dirty transition on a cached TLB entry is written
 		 * through and traps if the PTE is unmapped.
 		 */
-		pteval = ptep_get_and_clear(mm, address, pte);
 
-		set_tlb_ubc_flush_pending(mm, page, pte_dirty(pteval));
+		pteval = eptep_get_and_clear(mm, address, pte, &epte);
+
+		smp_mb__after_atomic();
+
+		if (pte_need_flush(mm, pteval, epte, &cpu))
+			set_tlb_ubc_flush_pending(mm, address,
+						  pte_dirty(pteval),
+						  tlb_ubc, cpu);
 	} else {
-		pteval = ptep_clear_flush(vma, address, pte);
+		pteval = eptep_clear_flush(vma, address, pte, &epte);
 	}
 
 	/* Move the dirty bit to the physical page now the pte is gone. */
@@ -1491,8 +1483,9 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		} else {
 			dec_mm_counter(mm, mm_counter(page));
 		}
-		set_pte_at(mm, address, pte,
-			   swp_entry_to_pte(make_hwpoison_entry(page)));
+		set_epte_at(mm, address, pte,
+			   swp_entry_to_pte(make_hwpoison_entry(page)),
+			   ZERO_EPTE(0));
 	} else if (pte_unused(pteval)) {
 		/*
 		 * The guest indicated that the page content is of no
@@ -1512,7 +1505,7 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		swp_pte = swp_entry_to_pte(entry);
 		if (pte_soft_dirty(pteval))
 			swp_pte = pte_swp_mksoft_dirty(swp_pte);
-		set_pte_at(mm, address, pte, swp_pte);
+		set_epte_at(mm, address, pte, swp_pte, ZERO_EPTE(0));
 	} else if (PageAnon(page)) {
 		swp_entry_t entry = { .val = page_private(page) };
 		pte_t swp_pte;
@@ -1530,7 +1523,7 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		}
 
 		if (swap_duplicate(entry) < 0) {
-			set_pte_at(mm, address, pte, pteval);
+			set_epte_at(mm, address, pte, pteval, ZERO_EPTE(0));
 			ret = SWAP_FAIL;
 			goto out_unmap;
 		}
@@ -1545,7 +1538,7 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		swp_pte = swp_entry_to_pte(entry);
 		if (pte_soft_dirty(pteval))
 			swp_pte = pte_swp_mksoft_dirty(swp_pte);
-		set_pte_at(mm, address, pte, swp_pte);
+		set_epte_at(mm, address, pte, swp_pte, ZERO_EPTE(0));
 	} else
 		dec_mm_counter(mm, mm_counter_file(page));
 
@@ -1599,12 +1592,14 @@ static int page_not_mapped(struct page *page)
  * SWAP_FAIL	- the page is unswappable
  * SWAP_MLOCK	- page is mlocked.
  */
-int try_to_unmap(struct page *page, enum ttu_flags flags)
+int try_to_unmap(struct page *page, enum ttu_flags flags,
+		 struct tlbflush_unmap_batch *tlb_ubc)
 {
 	int ret;
 	struct rmap_private rp = {
 		.flags = flags,
 		.lazyfreed = 0,
+		.tlb_ubc = tlb_ubc,
 	};
 
 	struct rmap_walk_control rwc = {

@@ -1070,6 +1070,8 @@ __do_page_fault(struct pt_regs *regs, unsigned long error_code,
 	struct mm_struct *mm;
 	int fault, major = 0;
 	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
+	int nr_ptes = 0;
+	unsigned long pf_address = address;
 
 	tsk = current;
 	mm = tsk->mm;
@@ -1242,7 +1244,7 @@ good_area:
 	 * the fault.  Since we never set FAULT_FLAG_RETRY_NOWAIT, if
 	 * we get VM_FAULT_RETRY back, the mmap_sem has been unlocked.
 	 */
-	fault = handle_mm_fault(mm, vma, address, flags);
+	fault = _handle_mm_fault(mm, vma, &pf_address, flags, &nr_ptes);
 	major |= fault & VM_FAULT_MAJOR;
 
 	/*
@@ -1285,6 +1287,9 @@ good_area:
 		tsk->min_flt++;
 		perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MIN, 1, regs, address);
 	}
+
+	/* push now without a semaphore taken */
+	lockless_push_to_tlb(mm, pf_address, nr_ptes);
 
 	check_v8086_mode(regs, address, tsk);
 }

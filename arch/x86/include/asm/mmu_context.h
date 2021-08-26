@@ -99,8 +99,19 @@ static inline void load_mm_ldt(struct mm_struct *mm)
 static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
 {
 #ifdef CONFIG_SMP
-	if (this_cpu_read(cpu_tlbstate.state) == TLBSTATE_OK)
+	if (this_cpu_read(cpu_tlbstate.state) <= TLBSTATE_NEARLY_LAZY)
 		this_cpu_write(cpu_tlbstate.state, TLBSTATE_LAZY);
+#endif
+}
+
+static inline void enter_nearly_lazy_tlb(struct mm_struct *mm,
+					 struct task_struct *tsk)
+{
+#ifdef CONFIG_SMP
+	if (this_cpu_read(cpu_tlbstate.state) == TLBSTATE_OK) {
+		this_cpu_write(cpu_tlbstate.state, TLBSTATE_NEARLY_LAZY);
+		this_cpu_write(cpu_tlbstate.nearly_lazy_cnt, 0);
+	}
 #endif
 }
 
@@ -113,6 +124,7 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
 #ifdef CONFIG_SMP
 		this_cpu_write(cpu_tlbstate.state, TLBSTATE_OK);
 		this_cpu_write(cpu_tlbstate.active_mm, next);
+		this_cpu_write(cpu_tlbstate.active_task, tsk);
 #endif
 		cpumask_set_cpu(cpu, mm_cpumask(next));
 
@@ -144,12 +156,15 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
 		 * ordering guarantee we need.
 		 *
 		 */
+
 		load_cr3(next->pgd);
 
 		trace_tlb_flush(TLB_FLUSH_ON_TASK_SWITCH, TLB_FLUSH_ALL);
 
 		/* Stop flush ipis for the previous mm */
 		cpumask_clear_cpu(cpu, mm_cpumask(prev));
+		if (cpumask_test_cpu(cpu, prev->cpu_vm_flush_mask_var))
+			cpumask_clear_cpu(cpu, prev->cpu_vm_flush_mask_var);
 
 		/* Load per-mm CR4 state */
 		load_mm_cr4(next);

@@ -206,6 +206,11 @@ static inline void native_cpuid(unsigned int *eax, unsigned int *ebx,
 	    : "memory");
 }
 
+static inline void native_load_cr3_no_invd(pgd_t *pgdir)
+{
+	native_write_cr3(__pa(pgdir) | (1ULL << 63));
+}
+
 static inline void load_cr3(pgd_t *pgdir)
 {
 	write_cr3(__pa(pgdir));

@@ -139,12 +139,17 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 
 	for (; old_addr < old_end; old_pte++, old_addr += PAGE_SIZE,
 				   new_pte++, new_addr += PAGE_SIZE) {
+		epte_t epte;
 		if (pte_none(*old_pte))
 			continue;
-		pte = ptep_get_and_clear(mm, old_addr, old_pte);
+		pte = eptep_get_and_clear(mm, old_addr, old_pte, &epte);
 		pte = move_pte(pte, new_vma->vm_page_prot, old_addr, new_addr);
+		if (pte_present(pte))
+			pte = epte_mk_uncached(pte, &epte);
+		else
+			epte = ZERO_EPTE(0);
 		pte = move_soft_dirty_pte(pte);
-		set_pte_at(mm, new_addr, new_pte, pte);
+		set_epte_at(mm, new_addr, new_pte, pte, epte);
 	}
 
 	arch_leave_lazy_mmu_mode();

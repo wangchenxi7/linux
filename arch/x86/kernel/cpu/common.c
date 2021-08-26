@@ -287,6 +287,19 @@ static __always_inline void setup_smap(struct cpuinfo_x86 *c)
 	}
 }
 
+static __always_inline void setup_pcid(struct cpuinfo_x86 *c)
+{
+	if (cpu_has(c, X86_FEATURE_PCID))
+		cr4_set_bits(X86_CR4_PCIDE);
+}
+
+static __init int setup_disable_pcid(char *arg)
+{
+	setup_clear_cpu_cap(X86_FEATURE_PCID);
+	return 1;
+}
+__setup("nopcid", setup_disable_pcid);
+
 /*
  * Some CPU features depend on higher CPUID levels, which may not always
  * be available due to CPUID level capping or broken virtualization
@@ -915,6 +928,7 @@ static void identify_cpu(struct cpuinfo_x86 *c)
 	/* Set up SMEP/SMAP */
 	setup_smep(c);
 	setup_smap(c);
+	setup_pcid(c);
 
 	/*
 	 * The vendor-specific functions might have changed features.

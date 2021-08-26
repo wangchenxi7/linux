@@ -203,6 +203,8 @@ struct pv_irq_ops {
 #endif
 };
 
+struct flush_tlb_info;
+
 struct pv_mmu_ops {
 	unsigned long (*read_cr2)(void);
 	void (*write_cr2)(unsigned long);
@@ -225,10 +227,7 @@ struct pv_mmu_ops {
 	void (*flush_tlb_user)(void);
 	void (*flush_tlb_kernel)(void);
 	void (*flush_tlb_single)(unsigned long addr);
-	void (*flush_tlb_others)(const struct cpumask *cpus,
-				 struct mm_struct *mm,
-				 unsigned long start,
-				 unsigned long end);
+	void (*flush_tlb_others)(struct flush_tlb_info *info);
 
 	/* Hooks for allocating and freeing a pagetable top-level */
 	int  (*pgd_alloc)(struct mm_struct *mm);
@@ -638,6 +637,12 @@ int paravirt_disable_iospace(void);
 		    "push %[_arg4];", "lea 4(%%esp),%%esp;",		\
 		    "0" ((u32)(arg1)), "1" ((u32)(arg2)),		\
 		    "2" ((u32)(arg3)), [_arg4] "mr" ((u32)(arg4)))
+#define PVOP_VCALL5(op, arg1, arg2, arg3, arg4, arg5)			\
+	__PVOP_VCALL(op,						\
+		    "push %[_arg5]; push %[_arg4];", "lea 8(%%esp),%%esp;",		\
+		    "0" ((u32)(arg1)), "1" ((u32)(arg2)),		\
+		    "2" ((u32)(arg3)), [_arg4] "mr" ((u32)(arg4)),	\
+		    [_arg5] "mr" ((u32)(arg5)))
 #else
 #define PVOP_CALL4(rettype, op, arg1, arg2, arg3, arg4)			\
 	__PVOP_CALL(rettype, op, "", "",				\
@@ -647,6 +652,11 @@ int paravirt_disable_iospace(void);
 	__PVOP_VCALL(op, "", "",					\
 		     PVOP_CALL_ARG1(arg1), PVOP_CALL_ARG2(arg2),	\
 		     PVOP_CALL_ARG3(arg3), PVOP_CALL_ARG4(arg4))
+#define PVOP_VCALL5(op, arg1, arg2, arg3, arg4, arg5)			\
+	__PVOP_VCALL(op, "mov %[_arg5], %%r8;", "",			\
+		     PVOP_CALL_ARG1(arg1), PVOP_CALL_ARG2(arg2),	\
+		     PVOP_CALL_ARG3(arg3), PVOP_CALL_ARG4(arg4),	\
+		     [_arg5] "mr"(arg5))
 #endif
 
 /* Lazy mode for batching updates / context switch */

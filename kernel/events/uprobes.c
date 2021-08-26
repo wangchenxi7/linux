@@ -155,6 +155,7 @@ static int __replace_page(struct vm_area_struct *vma, unsigned long addr,
 	struct mm_struct *mm = vma->vm_mm;
 	spinlock_t *ptl;
 	pte_t *ptep;
+	epte_t epte;
 	int err;
 	/* For mmu_notifiers */
 	const unsigned long mmun_start = addr;
@@ -186,8 +187,9 @@ static int __replace_page(struct vm_area_struct *vma, unsigned long addr,
 	}
 
 	flush_cache_page(vma, addr, pte_pfn(*ptep));
-	ptep_clear_flush_notify(vma, addr, ptep);
-	set_pte_at_notify(mm, addr, ptep, mk_pte(kpage, vma->vm_page_prot));
+	eptep_clear_flush_notify(vma, addr, ptep, &epte);
+	set_epte_at_notify(mm, addr, ptep, mk_pte(kpage, vma->vm_page_prot),
+			   ZERO_EPTE(0));
 
 	page_remove_rmap(page, false);
 	if (!page_mapped(page))

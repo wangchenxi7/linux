@@ -25,9 +25,9 @@ typedef struct {
 } mm_context_t;
 
 #ifdef CONFIG_SMP
-void leave_mm(int cpu);
+bool leave_mm(int cpu);
 #else
-static inline void leave_mm(int cpu)
+static inline bool leave_mm(int cpu)
 {
 }
 #endif

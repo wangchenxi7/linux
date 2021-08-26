@@ -87,6 +87,7 @@
 #include <asm/setup.h>
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
+#include <asm/tlbflush.h>
 
 static int kernel_init(void *);
 
@@ -526,6 +527,7 @@ asmlinkage __visible void __init start_kernel(void)
 	page_address_init();
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);
+	mm_init_tlb_gen(&init_mm);
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
@@ -678,6 +680,7 @@ asmlinkage __visible void __init start_kernel(void)
 	}
 
 	ftrace_init();
+	init_sw_tlb(true);
 
 	/* Do the rest non-__init'ed, we're now alive */
 	rest_init();

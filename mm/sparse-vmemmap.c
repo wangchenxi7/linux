@@ -179,7 +179,7 @@ pte_t * __meminit vmemmap_pte_populate(pmd_t *pmd, unsigned long addr, int node)
 		if (!p)
 			return NULL;
 		entry = pfn_pte(__pa(p) >> PAGE_SHIFT, PAGE_KERNEL);
-		set_pte_at(&init_mm, addr, pte, entry);
+		set_epte_at(&init_mm, addr, pte, entry, ZERO_EPTE(0));
 	}
 	return pte;
 }

@@ -182,6 +182,13 @@ extern void update_cpu_load_nohz(int active);
 static inline void update_cpu_load_nohz(int active) { }
 #endif
 
+/* Notifier for when a task gets migrated to a new CPU */
+struct task_migration_notifier {
+	struct task_struct *task;
+	int from_cpu;
+	int to_cpu;
+};
+extern void register_task_migration_notifier(struct notifier_block *n);
 extern unsigned long get_parent_ip(unsigned long addr);
 
 extern void dump_cpu_task(int cpu);
@@ -1367,14 +1374,45 @@ enum perf_event_task_context {
 	perf_nr_task_contexts,
 };
 
+#define N_TLB_FLUSH_ENTRIES (32)
+
+#define TLB_FLUSH_LEN_BITS	(PAGE_SHIFT - 2)
+#define TLB_FLUSH_ALL_LEN	((1<<TLB_FLUSH_LEN_BITS)-1)
+
+#define TLB_FLUSH_CPU_BITS	(63)
+
+struct flush_tlb_entry {
+	struct mm_struct *mm;	/* may be redundant, but easier */
+	struct {
+		unsigned long n_pages : TLB_FLUSH_LEN_BITS;
+		unsigned long kernel : 1;
+		unsigned long last : 1;
+		unsigned long vpn : 36;	/* since x86 address is 48 bits */
+		unsigned long cpu : 12;
+		unsigned long cpu_specific : 1;
+	};
+};
+
+struct flush_tlb_info {
+	unsigned int n_entries;
+	unsigned short n_pages;
+	bool same_mm;
+	cpumask_t cpumask;
+	struct flush_tlb_entry entries[0];
+} __packed;
+
+struct flush_tlb_info_single {
+	struct flush_tlb_info info;
+	struct flush_tlb_entry __entry;
+} __packed;
+
+struct flush_tlb_info_multi {
+	struct flush_tlb_info info;
+	struct flush_tlb_entry __entries[N_TLB_FLUSH_ENTRIES];
+} __packed;
+
 /* Track pages that require TLB flushes */
 struct tlbflush_unmap_batch {
-	/*
-	 * Each bit set is a CPU that potentially has a TLB entry for one of
-	 * the PFNs being flushed. See set_tlb_ubc_flush_pending().
-	 */
-	struct cpumask cpumask;
-
 	/* True if any bit in cpumask is set */
 	bool flush_required;
 
@@ -1384,6 +1422,8 @@ struct tlbflush_unmap_batch {
 	 * allows an update without redirtying the page.
 	 */
 	bool writable;
+
+	struct flush_tlb_info_multi flush_info;
 };
 
 struct task_struct {
@@ -1748,10 +1788,6 @@ struct task_struct {
 
 	unsigned long numa_pages_migrated;
 #endif /* CONFIG_NUMA_BALANCING */
-
-#ifdef CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
-	struct tlbflush_unmap_batch tlb_ubc;
-#endif
 
 	struct rcu_head rcu;
 

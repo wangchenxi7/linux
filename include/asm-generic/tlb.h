@@ -94,8 +94,6 @@ struct mmu_gather {
 #ifdef CONFIG_HAVE_RCU_TABLE_FREE
 	struct mmu_table_batch	*batch;
 #endif
-	unsigned long		start;
-	unsigned long		end;
 	/* we are in the middle of an operation to clear
 	 * a full mm and can make some optimizations */
 	unsigned int		fullmm : 1,
@@ -107,6 +105,7 @@ struct mmu_gather {
 	struct mmu_gather_batch	local;
 	struct page		*__pages[MMU_GATHER_BUNDLE];
 	unsigned int		batch_count;
+	struct flush_tlb_info_multi	flush_info;
 };
 
 #define HAVE_GENERIC_MMU_GATHER
@@ -128,20 +127,22 @@ static inline void tlb_remove_page(struct mmu_gather *tlb, struct page *page)
 }
 
 static inline void __tlb_adjust_range(struct mmu_gather *tlb,
-				      unsigned long address)
+				      unsigned long address, int cpu)
 {
-	tlb->start = min(tlb->start, address);
-	tlb->end = max(tlb->end, address + PAGE_SIZE);
+	tlb_add_flush_range(&tlb->flush_info.info, tlb->mm, address, cpu);
+}
+
+static inline void __tlb_reset_flush_tlb_info(struct flush_tlb_info *info,
+					      bool same_mm)
+{
+	info->n_entries = 0;
+	info->n_pages = 0;
+	info->same_mm = same_mm;
 }
 
 static inline void __tlb_reset_range(struct mmu_gather *tlb)
 {
-	if (tlb->fullmm) {
-		tlb->start = tlb->end = ~0;
-	} else {
-		tlb->start = TASK_SIZE;
-		tlb->end = 0;
-	}
+	__tlb_reset_flush_tlb_info(&tlb->flush_info.info, true);
 }
 
 /*
@@ -176,9 +177,9 @@ static inline void __tlb_reset_range(struct mmu_gather *tlb)
  * so we can later optimise away the tlb invalidate.   This helps when
  * userspace is unmapping already-unmapped pages, which happens quite a lot.
  */
-#define tlb_remove_tlb_entry(tlb, ptep, address)		\
+#define tlb_remove_tlb_entry(tlb, ptep, address, cpu)		\
 	do {							\
-		__tlb_adjust_range(tlb, address);		\
+		__tlb_adjust_range(tlb, address, cpu);		\
 		__tlb_remove_tlb_entry(tlb, ptep, address);	\
 	} while (0)
 
@@ -192,27 +193,27 @@ static inline void __tlb_reset_range(struct mmu_gather *tlb)
 
 #define tlb_remove_pmd_tlb_entry(tlb, pmdp, address)		\
 	do {							\
-		__tlb_adjust_range(tlb, address);		\
+		__tlb_adjust_range(tlb, address, -1);		\
 		__tlb_remove_pmd_tlb_entry(tlb, pmdp, address);	\
 	} while (0)
 
 #define pte_free_tlb(tlb, ptep, address)			\
 	do {							\
-		__tlb_adjust_range(tlb, address);		\
+		__tlb_adjust_range(tlb, address, -1);		\
 		__pte_free_tlb(tlb, ptep, address);		\
 	} while (0)
 
 #ifndef __ARCH_HAS_4LEVEL_HACK
 #define pud_free_tlb(tlb, pudp, address)			\
 	do {							\
-		__tlb_adjust_range(tlb, address);		\
+		__tlb_adjust_range(tlb, address, -1);		\
 		__pud_free_tlb(tlb, pudp, address);		\
 	} while (0)
 #endif
 
 #define pmd_free_tlb(tlb, pmdp, address)			\
 	do {							\
-		__tlb_adjust_range(tlb, address);		\
+		__tlb_adjust_range(tlb, address, -1);		\
 		__pmd_free_tlb(tlb, pmdp, address);		\
 	} while (0)
 

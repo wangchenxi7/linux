@@ -455,13 +455,17 @@ enum ttu_flags;
 struct tlbflush_unmap_batch;
 
 #ifdef CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
-void try_to_unmap_flush(void);
-void try_to_unmap_flush_dirty(void);
+void try_to_unmap_flush(struct tlbflush_unmap_batch *tlb_ubc);
+void try_to_unmap_flush_dirty(struct tlbflush_unmap_batch *tlb_ubc);
+void init_tlb_ubc(struct tlbflush_unmap_batch *tlb_ubc);
 #else
 static inline void try_to_unmap_flush(void)
 {
 }
 static inline void try_to_unmap_flush_dirty(void)
+{
+}
+static inline void init_tlb_ubc(struct tlbflush_unmap_batch *tlb_ubc)
 {
 }
 

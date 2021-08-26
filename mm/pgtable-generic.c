@@ -70,15 +70,38 @@ int ptep_clear_flush_young(struct vm_area_struct *vma,
 #endif
 
 #ifndef __HAVE_ARCH_PTEP_CLEAR_FLUSH
-pte_t ptep_clear_flush(struct vm_area_struct *vma, unsigned long address,
-		       pte_t *ptep)
+pte_t eptep_clear_flush(struct vm_area_struct *vma, unsigned long address,
+			pte_t *ptep, epte_t *epte)
 {
 	struct mm_struct *mm = (vma)->vm_mm;
 	pte_t pte;
-	pte = ptep_get_and_clear(mm, address, ptep);
-	if (pte_accessible(mm, pte))
-		flush_tlb_page(vma, address);
+
+	pte = eptep_get_and_clear(mm, address, ptep, epte);
+
+	if (pte_accessible(mm, pte)) {
+		int cpu = -1;
+		bool need_flush;
+
+		smp_mb__after_atomic();
+		need_flush = pte_need_flush(mm, pte, *epte, &cpu);
+
+		if (need_flush) {
+			if (cpu >= 0)
+				flush_tlb_page_cpu(vma, address, cpu);
+			else
+				flush_tlb_page(vma, address);
+		}
+	}
+
 	return pte;
+}
+
+pte_t ptep_clear_flush(struct vm_area_struct *vma, unsigned long address,
+		       pte_t *ptep)
+{
+	epte_t epte;
+
+	return eptep_clear_flush(vma, address, ptep, &epte);
 }
 #endif
 

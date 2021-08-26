@@ -52,7 +52,7 @@ static inline void native_pte_clear(struct mm_struct *mm, unsigned long addr,
 
 static inline void native_set_pte(pte_t *ptep, pte_t pte)
 {
-	*ptep = pte;
+	WRITE_ONCE(*ptep, pte);
 }
 
 static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
@@ -161,7 +161,10 @@ extern void cleanup_highmap(void);
 #define HAVE_ARCH_UNMAPPED_AREA
 #define HAVE_ARCH_UNMAPPED_AREA_TOPDOWN
 
-#define pgtable_cache_init()   do { } while (0)
+extern struct kmem_cache *epgtable_cache;
+
+extern void pgtable_cache_init(void);
+
 #define check_pgt_cache()      do { } while (0)
 
 #define PAGE_AGP    PAGE_KERNEL_NOCACHE

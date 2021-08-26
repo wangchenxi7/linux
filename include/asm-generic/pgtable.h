@@ -146,12 +146,12 @@ static inline pmd_t pmdp_huge_get_and_clear_full(struct mm_struct *mm,
 #endif
 
 #ifndef __HAVE_ARCH_PTEP_GET_AND_CLEAR_FULL
-static inline pte_t ptep_get_and_clear_full(struct mm_struct *mm,
+static inline pte_t eptep_get_and_clear_full(struct mm_struct *mm,
 					    unsigned long address, pte_t *ptep,
-					    int full)
+					    int full, epte_t *eptep)
 {
 	pte_t pte;
-	pte = ptep_get_and_clear(mm, address, ptep);
+	pte = eptep_get_and_clear(mm, address, ptep, epte);
 	return pte;
 }
 #endif
@@ -162,12 +162,12 @@ static inline pte_t ptep_get_and_clear_full(struct mm_struct *mm,
  * not present, or in the process of an address space destruction.
  */
 #ifndef __HAVE_ARCH_PTE_CLEAR_NOT_PRESENT_FULL
-static inline void pte_clear_not_present_full(struct mm_struct *mm,
+static inline void epte_clear_not_present_full(struct mm_struct *mm,
 					      unsigned long address,
 					      pte_t *ptep,
 					      int full)
 {
-	pte_clear(mm, address, ptep);
+	epte_clear(mm, address, ptep);
 }
 #endif
 
@@ -176,6 +176,10 @@ extern pte_t ptep_clear_flush(struct vm_area_struct *vma,
 			      unsigned long address,
 			      pte_t *ptep);
 #endif
+
+extern pte_t eptep_clear_flush(struct vm_area_struct *vma,
+			      unsigned long address,
+			      pte_t *ptep, epte_t *epte);
 
 #ifndef __HAVE_ARCH_PMDP_HUGE_CLEAR_FLUSH
 extern pmd_t pmdp_huge_clear_flush(struct vm_area_struct *vma,
@@ -451,6 +455,30 @@ static inline void ptep_modify_prot_commit(struct mm_struct *mm,
 	__ptep_modify_prot_commit(mm, addr, ptep, pte);
 }
 #endif /* __HAVE_ARCH_PTEP_MODIFY_PROT_TRANSACTION */
+
+static inline pte_t eptep_modify_prot_start(struct mm_struct *mm,
+					   unsigned long addr,
+					   pte_t *ptep, epte_t *eptep)
+{
+	*eptep = get_epte(ptep);
+	return ptep_modify_prot_start(mm, addr, ptep);
+}
+
+static inline void eptep_modify_prot_commit(struct mm_struct *mm,
+					   unsigned long addr,
+					   pte_t *ptep, pte_t pte,
+					   epte_t epte)
+{
+	epte_t *eptep = get_eptep(ptep);
+
+	if (!eptep)
+		pte = pte_mk_unshadowed(pte, epte);
+	else
+		__set_epte(eptep, epte);
+	__ptep_modify_prot_commit(mm, addr, ptep, pte);
+}
+
+
 #endif /* CONFIG_MMU */
 
 /*

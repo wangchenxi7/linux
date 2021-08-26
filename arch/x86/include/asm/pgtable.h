@@ -38,7 +38,19 @@ extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)]
 extern spinlock_t pgd_lock;
 extern struct list_head pgd_list;
 
+#define ZERO_EPTE(a) ({		epte_t __epte = {0};			\
+				__epte;	})
+#define UNCACHED_EPTE(a) ({	epte_t __epte = {.generation =  EPTE_GEN_UNCACHED};	\
+				__epte;	})
+
+
 extern struct mm_struct *pgd_page_get_mm(struct page *page);
+extern pte_t remove_shadow_pte(unsigned long addr, pte_t ptent);
+
+static inline void  __set_epte(epte_t *eptep, epte_t epte)
+{
+	*eptep = epte;
+}
 
 #ifdef CONFIG_PARAVIRT
 #include <asm/paravirt.h>
@@ -89,6 +101,20 @@ extern struct mm_struct *pgd_page_get_mm(struct page *page);
 #define arch_end_context_switch(prev)	do {} while(0)
 
 #endif	/* CONFIG_PARAVIRT */
+
+#define mk_pgd(page, pgprot)   pfn_pgd(page_to_pfn(page), (pgprot))
+#define mk_pud(page, pgprot)   pfn_pud(page_to_pfn(page), (pgprot))
+
+/*
+ * Currently stuck as a macro due to indirect forward reference to
+ * linux/mmzone.h's __section_mem_map_addr() definition:
+ */
+#define pmd_page(pmd)	pfn_to_page((pmd_val(pmd) & PTE_PFN_MASK) >> PAGE_SHIFT)
+
+static inline void __epte_clear(epte_t *eptep)
+{
+	eptep->val = 0;
+}
 
 /*
  * The following only work if pte_present() is true.
@@ -368,13 +394,25 @@ static inline pgprotval_t massage_pgprot(pgprot_t pgprot)
 static inline pte_t pfn_pte(unsigned long page_nr, pgprot_t pgprot)
 {
 	return __pte(((phys_addr_t)page_nr << PAGE_SHIFT) |
-		     massage_pgprot(pgprot));
+			massage_pgprot(pgprot));
 }
 
 static inline pmd_t pfn_pmd(unsigned long page_nr, pgprot_t pgprot)
 {
 	return __pmd(((phys_addr_t)page_nr << PAGE_SHIFT) |
-		     massage_pgprot(pgprot));
+			massage_pgprot(pgprot));
+}
+
+static inline pud_t pfn_pud(unsigned long page_nr, pgprot_t pgprot)
+{
+	return __pud(((phys_addr_t)page_nr << PAGE_SHIFT) |
+			massage_pgprot(pgprot));
+}
+
+static inline pgd_t pfn_pgd(unsigned long page_nr, pgprot_t pgprot)
+{
+	return __pgd(((phys_addr_t)page_nr << PAGE_SHIFT) |
+			massage_pgprot(pgprot));
 }
 
 static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
@@ -462,6 +500,50 @@ pte_t *populate_extra_pte(unsigned long vaddr);
 #include <linux/mm_types.h>
 #include <linux/mmdebug.h>
 #include <linux/log2.h>
+#include <linux/page-flags.h>
+
+static inline epte_t *get_eptep(pte_t *ptep)
+{
+	struct page *page = virt_to_page((unsigned long)ptep);
+
+	if (!PageHasEPTES(page))
+		return NULL;
+
+	return &page->eptes[((unsigned long)(ptep) & ~PAGE_MASK) / 8];
+}
+
+static inline epte_t get_epte(pte_t *ptep)
+{
+	epte_t *pres = get_eptep(ptep);
+
+	if (pres != NULL)
+		return *pres;
+	return ZERO_EPTE(0);
+}
+
+static inline void epte_clear(struct mm_struct *mm, unsigned long addr,
+			      pte_t *ptep)
+{
+	epte_t *eptep = get_eptep(ptep);
+
+	pte_clear(mm, addr, ptep);
+
+	if (eptep)
+		__epte_clear(eptep);
+}
+
+static inline epte_t epte_get_and_clear(pte_t *ptep)
+{
+	epte_t *eptep, epte;
+
+	eptep = get_eptep(ptep);
+	if (eptep) {
+		epte = *eptep;
+		__set_epte(eptep, ZERO_EPTE(0));
+	} else
+		epte = ZERO_EPTE(0);
+	return epte;
+}
 
 static inline int pte_none(pte_t pte)
 {
@@ -477,6 +559,27 @@ static inline int pte_same(pte_t a, pte_t b)
 static inline int pte_present(pte_t a)
 {
 	return pte_flags(a) & (_PAGE_PRESENT | _PAGE_PROTNONE);
+}
+
+static inline pte_t pte_mk_unshadowed(pte_t pte, epte_t epte)
+{
+	if (epte.sw_young)
+		pte = pte_mkyoung(pte);
+	return pte;
+}
+
+static inline pte_t epte_mk_uncached(pte_t pte, epte_t *epte)
+{
+	if (pte_young(pte))
+		epte->sw_young = 1;
+	epte->generation = EPTE_GEN_UNCACHED;
+	epte->cpu_plus_one = 0;
+	return pte_mkold(pte);
+}
+
+static inline pte_t ptep_mk_unshadowed(pte_t *ptep)
+{
+	return pte_mk_unshadowed(*ptep, get_epte(ptep));
 }
 
 #ifdef __HAVE_ARCH_PTE_DEVMAP
@@ -544,13 +647,6 @@ static inline unsigned long pmd_page_vaddr(pmd_t pmd)
 {
 	return (unsigned long)__va(pmd_val(pmd) & pmd_pfn_mask(pmd));
 }
-
-/*
- * Currently stuck as a macro due to indirect forward reference to
- * linux/mmzone.h's __section_mem_map_addr() definition:
- */
-#define pmd_page(pmd)		\
-	pfn_to_page((pmd_val(pmd) & pmd_pfn_mask(pmd)) >> PAGE_SHIFT)
 
 /*
  * the pmd page can be thought of an array like this: pmd_t[PTRS_PER_PMD]
@@ -735,6 +831,7 @@ static inline pmd_t native_local_pmdp_get_and_clear(pmd_t *pmdp)
 static inline void native_set_pte_at(struct mm_struct *mm, unsigned long addr,
 				     pte_t *ptep , pte_t pte)
 {
+	/* XXX: get all the logic of push_to_tlb into here */
 	native_set_pte(ptep, pte);
 }
 
@@ -788,12 +885,22 @@ static inline pte_t ptep_get_and_clear(struct mm_struct *mm, unsigned long addr,
 	return pte;
 }
 
+static inline pte_t eptep_get_and_clear(struct mm_struct *mm,
+					unsigned long addr,
+					pte_t *ptep, epte_t *eptep)
+{
+	*eptep = epte_get_and_clear(ptep);
+	return ptep_get_and_clear(mm, addr, ptep);
+}
+
 #define __HAVE_ARCH_PTEP_GET_AND_CLEAR_FULL
-static inline pte_t ptep_get_and_clear_full(struct mm_struct *mm,
+static inline pte_t eptep_get_and_clear_full(struct mm_struct *mm,
 					    unsigned long addr, pte_t *ptep,
-					    int full)
+					    int full, epte_t *eptep)
 {
 	pte_t pte;
+
+	*eptep = epte_get_and_clear(ptep);
 	if (full) {
 		/*
 		 * Full address destruction in progress; paravirt does not
@@ -879,6 +986,39 @@ static inline unsigned long page_level_size(enum pg_level level)
 static inline unsigned long page_level_mask(enum pg_level level)
 {
 	return ~(page_level_size(level) - 1);
+}
+
+static inline void set_epte_at(struct mm_struct *mm, unsigned long addr,
+			       pte_t *ptep, pte_t pte, epte_t epte)
+{
+	epte_t *eptep = get_eptep(ptep);
+
+	if (eptep == NULL)
+		pte = pte_mk_unshadowed(pte, epte);
+
+	set_pte_at(mm, addr, ptep, pte);
+	if (eptep != NULL)
+		__set_epte(eptep, epte);
+}
+
+static inline pte_t epte_mk_reset(struct mm_struct *mm, pte_t pte,
+				  epte_t *epte, pte_t oldpte,
+				  bool keep_sw_young)
+{
+	if (pte_young(oldpte))
+		epte->cpu_plus_one = 0;
+
+	if (pte_young(oldpte) || epte->generation == EPTE_GEN_DISABLED)
+		epte->generation = atomic_read(&mm->flush_cnt);
+
+	if (!keep_sw_young)
+		epte->sw_young = 0;
+	epte->sw_young |= pte_young(pte);
+
+	/* no way to know who cached it */
+	pte = pte_mkold(pte);
+
+	return pte;
 }
 
 /*

@@ -112,7 +112,7 @@ static int mfill_zeropage_pte(struct mm_struct *dst_mm,
 	dst_pte = pte_offset_map_lock(dst_mm, dst_pmd, dst_addr, &ptl);
 	if (!pte_none(*dst_pte))
 		goto out_unlock;
-	set_pte_at(dst_mm, dst_addr, dst_pte, _dst_pte);
+	set_epte_at(dst_mm, dst_addr, dst_pte, _dst_pte, ZERO_EPTE(0));
 	/* No need to invalidate - it was non-present before */
 	update_mmu_cache(dst_vma, dst_addr, dst_pte);
 	ret = 0;

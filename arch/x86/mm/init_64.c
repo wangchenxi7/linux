@@ -184,11 +184,15 @@ void sync_global_pgds(unsigned long start, unsigned long end, int removed)
 		list_for_each_entry(page, &pgd_list, lru) {
 			pgd_t *pgd;
 			spinlock_t *pgt_lock;
+			struct mm_struct *mm = pgd_page_get_mm(page);
 
 			pgd = (pgd_t *)page_address(page) + pgd_index(address);
 			/* the pgt_lock only for Xen */
-			pgt_lock = &pgd_page_get_mm(page)->page_table_lock;
-			spin_lock(pgt_lock);
+			if (mm) {
+				pgt_lock =
+					&pgd_page_get_mm(page)->page_table_lock;
+				spin_lock(pgt_lock);
+			}
 
 			if (!pgd_none(*pgd_ref) && !pgd_none(*pgd))
 				BUG_ON(pgd_page_vaddr(*pgd)
@@ -202,7 +206,8 @@ void sync_global_pgds(unsigned long start, unsigned long end, int removed)
 					set_pgd(pgd, *pgd_ref);
 			}
 
-			spin_unlock(pgt_lock);
+			if (mm)
+				spin_unlock(pgt_lock);
 		}
 		spin_unlock(&pgd_lock);
 	}
@@ -361,6 +366,16 @@ void __init init_extra_mapping_wb(unsigned long phys, unsigned long size)
 void __init init_extra_mapping_uc(unsigned long phys, unsigned long size)
 {
 	__init_extra_mapping(phys, size, _PAGE_CACHE_MODE_UC);
+}
+
+struct kmem_cache *epgtable_cache;
+
+void __init pgtable_cache_init(void)
+{
+	epgtable_cache = kmem_cache_create("EPT_cache", sizeof(epte_t) * 512,
+					  sizeof(epte_t) * 512, 0, NULL);
+	if (epgtable_cache == NULL)
+		panic("Couldn't allocate pgtable caches");
 }
 
 /*
@@ -830,7 +845,7 @@ remove_pte_table(pte_t *pte_start, unsigned long addr, unsigned long end,
 				free_pagetable(pte_page(*pte), 0);
 
 			spin_lock(&init_mm.page_table_lock);
-			pte_clear(&init_mm, addr, pte);
+			epte_clear(&init_mm, addr, pte);
 			spin_unlock(&init_mm.page_table_lock);
 
 			/* For non-direct mapping, pages means nothing. */
@@ -853,7 +868,7 @@ remove_pte_table(pte_t *pte_start, unsigned long addr, unsigned long end,
 				free_pagetable(pte_page(*pte), 0);
 
 				spin_lock(&init_mm.page_table_lock);
-				pte_clear(&init_mm, addr, pte);
+				epte_clear(&init_mm, addr, pte);
 				spin_unlock(&init_mm.page_table_lock);
 			}
 		}

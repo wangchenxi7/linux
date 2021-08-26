@@ -5,6 +5,7 @@
 #include <asm/tlb.h>
 #include <asm/fixmap.h>
 #include <asm/mtrr.h>
+#include <linux/slab.h>
 
 #define PGALLOC_GFP GFP_KERNEL | __GFP_NOTRACK | __GFP_REPEAT | __GFP_ZERO
 
@@ -21,6 +22,14 @@ pte_t *pte_alloc_one_kernel(struct mm_struct *mm, unsigned long address)
 	return (pte_t *)__get_free_page(PGALLOC_GFP);
 }
 
+void pte_alloc_eptes(struct page *pte)
+{
+	pte->eptes = kmem_cache_alloc(epgtable_cache, __userpte_alloc_gfp);
+
+	if (pte->eptes != NULL)
+		SetPageHasEPTES(pte);
+}
+
 pgtable_t pte_alloc_one(struct mm_struct *mm, unsigned long address)
 {
 	struct page *pte;
@@ -32,6 +41,7 @@ pgtable_t pte_alloc_one(struct mm_struct *mm, unsigned long address)
 		__free_page(pte);
 		return NULL;
 	}
+	pte_alloc_eptes(pte);
 	return pte;
 }
 
@@ -54,6 +64,12 @@ early_param("userpte", setup_userpte);
 
 void ___pte_free_tlb(struct mmu_gather *tlb, struct page *pte)
 {
+	if (PageHasEPTES(pte)) {
+		BUG_ON(pte->eptes == NULL);
+		kmem_cache_free(epgtable_cache, pte->eptes);
+		pte->eptes = NULL;
+		ClearPageHasEPTES(pte);
+	}
 	pgtable_page_dtor(pte);
 	paravirt_release_pte(page_to_pfn(pte));
 	tlb_remove_page(tlb, pte);
@@ -128,7 +144,8 @@ static void pgd_ctor(struct mm_struct *mm, pgd_t *pgd)
 
 	/* list required to sync kernel mapping updates */
 	if (!SHARED_KERNEL_PMD) {
-		pgd_set_mm(pgd, mm);
+		if (mm != NULL)
+			pgd_set_mm(pgd, mm);
 		pgd_list_add(pgd);
 	}
 }
@@ -182,7 +199,8 @@ void pud_populate(struct mm_struct *mm, pud_t *pudp, pmd_t *pmd)
 	 * section 8.1: in PAE mode we explicitly have to flush the
 	 * TLB via cr3 if the top-level pgd is changed...
 	 */
-	flush_tlb_mm(mm);
+	if (mm)
+		flush_tlb_mm(mm);
 }
 #else  /* !CONFIG_X86_PAE */
 
@@ -199,7 +217,8 @@ static void free_pmds(struct mm_struct *mm, pmd_t *pmds[])
 		if (pmds[i]) {
 			pgtable_pmd_page_dtor(virt_to_page(pmds[i]));
 			free_page((unsigned long)pmds[i]);
-			mm_dec_nr_pmds(mm);
+			if (mm)
+				mm_dec_nr_pmds(mm);
 		}
 }
 
@@ -217,7 +236,7 @@ static int preallocate_pmds(struct mm_struct *mm, pmd_t *pmds[])
 			pmd = NULL;
 			failed = true;
 		}
-		if (pmd)
+		if (pmd && mm)
 			mm_inc_nr_pmds(mm);
 		pmds[i] = pmd;
 	}
@@ -361,7 +380,8 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
 	if (pgd == NULL)
 		goto out;
 
-	mm->pgd = pgd;
+	if (mm)
+		mm->pgd = pgd;
 
 	if (preallocate_pmds(mm, pmds) != 0)
 		goto out_free_pgd;
@@ -413,7 +433,25 @@ int ptep_set_access_flags(struct vm_area_struct *vma,
 	int changed = !pte_same(*ptep, entry);
 
 	if (changed && dirty) {
-		*ptep = entry;
+		epte_t *eptep = get_eptep(ptep);
+		epte_t epte = get_epte(ptep);
+
+		if (eptep == NULL) {
+			set_pte(ptep, entry);
+		} else {
+			pte_t oldpte;
+
+			epte.sw_young = pte_young(entry);
+
+			entry = pte_mkold(entry);
+
+			oldpte = native_make_pte(xchg(&ptep->pte, entry.pte));
+			smp_mb__after_atomic();
+
+			epte_mk_reset(vma->vm_mm, entry, &epte, oldpte, true);
+			__set_epte(eptep, epte);
+		}
+
 		pte_update(vma->vm_mm, address, ptep);
 	}
 
@@ -447,13 +485,26 @@ int ptep_test_and_clear_young(struct vm_area_struct *vma,
 			      unsigned long addr, pte_t *ptep)
 {
 	int ret = 0;
+	epte_t *eptep = get_eptep(ptep);
+	epte_t epte = get_epte(ptep);
 
 	if (pte_young(*ptep))
 		ret = test_and_clear_bit(_PAGE_BIT_ACCESSED,
 					 (unsigned long *) &ptep->pte);
 
-	if (ret)
+	if (ret) {
+		smp_mb__after_atomic();
 		pte_update(vma->vm_mm, addr, ptep);
+		epte.cpu_plus_one = 0;
+		epte.generation = atomic_read(&vma->vm_mm->flush_cnt);
+	} else {
+		ret = epte.sw_young;
+	}
+
+	epte.sw_young = 0;
+
+	if (eptep != NULL)
+		__set_epte(eptep, epte);
 
 	return ret;
 }

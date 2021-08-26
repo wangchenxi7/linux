@@ -865,6 +865,7 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 
 	if (pte_write(*ptep) || pte_dirty(*ptep)) {
 		pte_t entry;
+		epte_t epte;
 
 		swapped = PageSwapCache(page);
 		flush_cache_page(vma, addr, page_to_pfn(page));
@@ -877,19 +878,21 @@ static int write_protect_page(struct vm_area_struct *vma, struct page *page,
 		 * this assure us that no O_DIRECT can happen after the check
 		 * or in the middle of the check.
 		 */
-		entry = ptep_clear_flush_notify(vma, addr, ptep);
+		entry = eptep_clear_flush_notify(vma, addr, ptep, &epte);
+		entry = epte_mk_uncached(entry, &epte);
+
 		/*
 		 * Check that no O_DIRECT or similar I/O is in progress on the
 		 * page
 		 */
 		if (page_mapcount(page) + 1 + swapped != page_count(page)) {
-			set_pte_at(mm, addr, ptep, entry);
+			set_epte_at(mm, addr, ptep, entry, epte);
 			goto out_unlock;
 		}
 		if (pte_dirty(entry))
 			set_page_dirty(page);
 		entry = pte_mkclean(pte_wrprotect(entry));
-		set_pte_at_notify(mm, addr, ptep, entry);
+		set_epte_at_notify(mm, addr, ptep, entry, epte);
 	}
 	*orig_pte = *ptep;
 	err = 0;
@@ -922,6 +925,8 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 	int err = -EFAULT;
 	unsigned long mmun_start;	/* For mmu_notifiers */
 	unsigned long mmun_end;		/* For mmu_notifiers */
+	pte_t pte;
+	epte_t epte;
 
 	addr = page_address_in_vma(page, vma);
 	if (addr == -EFAULT)
@@ -945,8 +950,11 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 	page_add_anon_rmap(kpage, vma, addr, false);
 
 	flush_cache_page(vma, addr, pte_pfn(*ptep));
-	ptep_clear_flush_notify(vma, addr, ptep);
-	set_pte_at_notify(mm, addr, ptep, mk_pte(kpage, vma->vm_page_prot));
+	eptep_clear_flush_notify(vma, addr, ptep, &epte);
+	epte = UNCACHED_EPTE(0);
+	pte = epte_mk_uncached(mk_pte(kpage, vma->vm_page_prot), &epte);
+	set_epte_at_notify(mm, addr, ptep, mk_pte(kpage, vma->vm_page_prot),
+			   epte);
 
 	page_remove_rmap(page, false);
 	if (!page_mapped(page))

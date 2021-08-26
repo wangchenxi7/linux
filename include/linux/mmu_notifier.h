@@ -306,6 +306,20 @@ static inline void mmu_notifier_mm_destroy(struct mm_struct *mm)
 	if (mm_has_notifiers(mm))
 		__mmu_notifier_mm_destroy(mm);
 }
+#define set_epte_at_notify(__mm, __address, __ptep, __pte, __epte)	\
+({									\
+	struct mm_struct *___mm = __mm;					\
+	unsigned long ___address = __address;				\
+	pte_t ___pte = __pte;						\
+	epte_t *___eptep = get_eptep(__ptep);				\
+									\
+	if (___eptep == NULL)						\
+		___pte = pte_mk_unshadowed(__pte, __epte);		\
+	mmu_notifier_change_pte(___mm, ___address, ___pte);		\
+	set_pte_at(___mm, ___address, __ptep, ___pte);			\
+	if (___eptep != NULL)						\
+		__set_epte(___eptep, __epte);				\
+})
 
 #define ptep_clear_flush_young_notify(__vma, __address, __ptep)		\
 ({									\
@@ -367,6 +381,20 @@ static inline void mmu_notifier_mm_destroy(struct mm_struct *mm)
 									\
 	___pte;								\
 })
+
+#define	eptep_clear_flush_notify(__vma, __address, __ptep, __eptep)	\
+({									\
+	unsigned long ___addr = __address & PAGE_MASK;			\
+	struct mm_struct *___mm = (__vma)->vm_mm;			\
+	pte_t ___pte;							\
+									\
+	___pte = eptep_clear_flush(__vma, __address, __ptep, __eptep);	\
+	mmu_notifier_invalidate_range(___mm, ___addr,			\
+					___addr + PAGE_SIZE);		\
+									\
+	___pte;								\
+})
+
 
 #define pmdp_huge_clear_flush_notify(__vma, __haddr, __pmd)		\
 ({									\
@@ -474,6 +502,7 @@ static inline void mmu_notifier_mm_destroy(struct mm_struct *mm)
 #define ptep_clear_young_notify ptep_test_and_clear_young
 #define pmdp_clear_young_notify pmdp_test_and_clear_young
 #define	ptep_clear_flush_notify ptep_clear_flush
+#define	eptep_clear_flush_notify eptep_clear_flush
 #define pmdp_huge_clear_flush_notify pmdp_huge_clear_flush
 #define pmdp_huge_get_and_clear_notify pmdp_huge_get_and_clear
 #define set_pte_at_notify set_pte_at

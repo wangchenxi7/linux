@@ -269,6 +269,7 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 	struct vm_area_struct *vma = walk->vma;
 	spinlock_t *ptl;
 	pte_t *orig_pte, *pte, ptent;
+	epte_t eptent;
 	struct page *page;
 	int nr_swap = 0;
 	unsigned long next;
@@ -284,6 +285,7 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 	orig_pte = pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	arch_enter_lazy_mmu_mode();
 	for (; addr != end; pte++, addr += PAGE_SIZE) {
+		eptent = get_epte(pte);
 		ptent = *pte;
 
 		if (pte_none(ptent))
@@ -301,7 +303,7 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 				continue;
 			nr_swap--;
 			free_swap_and_cache(entry);
-			pte_clear_not_present_full(mm, addr, pte, tlb->fullmm);
+			epte_clear_not_present_full(mm, addr, pte, tlb->fullmm);
 			continue;
 		}
 
@@ -360,22 +362,40 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 			unlock_page(page);
 		}
 
-		if (pte_young(ptent) || pte_dirty(ptent)) {
+		if (pte_young(ptent) || pte_dirty(ptent) || eptent.sw_young) {
+			int cpu = -1;
+			bool need_flush = true;
+			pte_t oldpte;
+
 			/*
 			 * Some of architecture(ex, PPC) don't update TLB
 			 * with set_pte_at and tlb_remove_tlb_entry so for
 			 * the portability, remap the pte with old|clean
 			 * after pte clearing.
 			 */
-			ptent = ptep_get_and_clear_full(mm, addr, pte,
-							tlb->fullmm);
-
+			ptent = eptep_get_and_clear_full(mm, addr, pte,
+							 tlb->fullmm, &eptent);
+			oldpte = ptent;
 			ptent = pte_mkold(ptent);
 			ptent = pte_mkclean(ptent);
-			set_pte_at(mm, addr, pte, ptent);
+
+			if (!tlb->fullmm) {
+				smp_mb__after_atomic();
+				need_flush = pte_need_flush(mm, oldpte,
+							    eptent, &cpu);
+				if (need_flush)
+					ptent = epte_mk_reset(mm, ptent,
+							&eptent, oldpte, false);
+				else
+					ptent = epte_mk_uncached(ptent,
+								 &eptent);
+			}
+
+			set_epte_at(mm, addr, pte, ptent, eptent);
 			if (PageActive(page))
 				deactivate_page(page);
-			tlb_remove_tlb_entry(tlb, pte, addr);
+			if (need_flush)
+				tlb_remove_tlb_entry(tlb, pte, addr, cpu);
 		}
 	}
 out:

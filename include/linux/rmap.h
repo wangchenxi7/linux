@@ -183,7 +183,8 @@ int page_referenced(struct page *, int is_locked,
 
 #define TTU_ACTION(x) ((x) & TTU_ACTION_MASK)
 
-int try_to_unmap(struct page *, enum ttu_flags flags);
+int try_to_unmap(struct page *, enum ttu_flags flags,
+		 struct tlbflush_unmap_batch *tlb_ubc);
 
 /*
  * Used by uprobes to replace a userspace page safely

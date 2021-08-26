@@ -105,6 +105,7 @@ enum pageflags {
 	PG_young,
 	PG_idle,
 #endif
+	PG_has_eptes,
 	__NR_PAGEFLAGS,
 
 	/* Filesystems */
@@ -393,6 +394,8 @@ static inline int PageKsm(struct page *page)
 #else
 TESTPAGEFLAG_FALSE(Ksm)
 #endif
+
+PAGEFLAG(HasEPTES, has_eptes, PF_ANY) __CLEARPAGEFLAG(HasEPTES, has_eptes, PF_ANY)
 
 u64 stable_page_flags(struct page *page);
 

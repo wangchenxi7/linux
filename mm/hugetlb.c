@@ -3184,7 +3184,7 @@ again:
 		}
 
 		pte = huge_ptep_get_and_clear(mm, address, ptep);
-		tlb_remove_tlb_entry(tlb, ptep, address);
+		tlb_remove_tlb_entry(tlb, ptep, address, -1);
 		if (huge_pte_dirty(pte))
 			set_page_dirty(page);
 
