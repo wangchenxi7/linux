@@ -1,8 +1,13 @@
-        Linux kernel release 4.x <http://kernel.org/>
+        Linux kernel release 4.5 with VMWare IPI patch
 
-These are the release notes for Linux version 4.  Read them carefully,
-as they tell you what this is all about, explain how to install the
-kernel, and what to do if something goes wrong. 
+
+Applied Patch
+        Optimizing the TLB Shootdown Algorithm with Page Access Tracking, USENIX ATC 2017
+        https://nadav.amit.zone/publications/amit2017optimizing.html
+        
+
+
+
 
 WHAT IS LINUX?
 
