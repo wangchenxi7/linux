@@ -163,6 +163,38 @@ void frontswap_register_ops(struct frontswap_ops *ops)
 }
 EXPORT_SYMBOL(frontswap_register_ops);
 
+/**
+ * Semeru - remove the old registered frontswap_ops
+ * Only alow one registered frontswap_ops.
+ * Remove the old one when the frontswap_enabled_key is larger than 1
+ * 
+ * This fucntion provide the function of removing the old registered frontswap_ops.
+ *  Warning : assume the  number of swap partitions are not changed during the deregistration procedure.
+ */
+void frontswap_deregister_ops(void)
+{
+	struct frontswap_ops *cur_op, *next_op;
+
+	if (!frontswap_enabled)
+		return; // not enabled
+
+	while (frontswap_ops != NULL) {
+
+		// decrease and remove all the registered frontswap_ops
+		cur_op = frontswap_ops;
+		next_op = frontswap_ops->next;
+
+		pr_warn("%s, cur_ops 0x%lx, next_ops 0x%lx", __func__, (size_t)cur_op, (size_t)next_op);
+
+		// remove a node from the link list
+		if (cmpxchg(&frontswap_ops, cur_op, next_op) == cur_op) { // (ptr, old, new)
+			pr_warn("%s, removed frontswap ops 0x%lx from link list, current ops is 0x%lx.",
+				__func__, (size_t)cur_op, (size_t)frontswap_ops );
+		}
+	}
+}
+EXPORT_SYMBOL(frontswap_deregister_ops);
+
 /*
  * Enable/disable frontswap writethrough (see above).
  */

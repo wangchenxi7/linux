@@ -334,6 +334,12 @@
 325	common	mlock2			sys_mlock2
 326	common	copy_file_range		sys_copy_file_range
 
+
+## extended syscalls
+# swap stats
+451	common	reset_swap_stats	sys_reset_swap_stats
+452	common	get_swap_stats		sys_get_swap_stats
+
 #
 # x32-specific system call numbers start at 512 to avoid cache impact
 # for native 64-bit operation.

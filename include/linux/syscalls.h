@@ -80,6 +80,9 @@ union bpf_attr;
 #include <linux/key.h>
 #include <trace/syscall.h>
 
+// hermit thread
+#include <linux/extended_syscalls.h>
+
 /*
  * __MAP - apply a macro to syscall arguments
  * __MAP(n, m, t1, a1, t2, a2, ..., tn, an) will expand to

@@ -60,6 +60,10 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/vmscan.h>
 
+
+// Hermit Thread
+#include <linux/swap_stats.h>
+
 struct scan_control {
 	/* How many pages shrink_list() should reclaim */
 	unsigned long nr_to_reclaim;
@@ -907,6 +911,10 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 	unsigned long nr_immediate = 0;
 	struct tlbflush_unmap_batch tlb_ubc;
 
+	//hemitthread 
+	uint64_t tlb_flush_ts = 0;
+	uint64_t swap_out_ts = 0;
+
 	init_tlb_ubc(&tlb_ubc);
 	cond_resched();
 
@@ -920,6 +928,9 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 		int ret = SWAP_SUCCESS;
 
 		cond_resched();
+
+		// hermit
+		swap_out_ts = get_cycles_start();
 
 		page = lru_to_page(page_list);
 		list_del(&page->lru);
@@ -1122,13 +1133,23 @@ static unsigned long shrink_page_list(struct list_head *page_list,
 			 * potentially exists to avoid CPU writes after IO
 			 * starts and then write it out here.
 			 */
+			tlb_flush_ts = get_cycles_start();
 			try_to_unmap_flush_dirty(&tlb_ubc);
+			accum_adc_time_stat(ADC_SWAP_TLB_FLUSH_LATENCY_1,
+					    get_cycles_end() - tlb_flush_ts);
+
 			switch (pageout(page, mapping, sc)) {
 			case PAGE_KEEP:
 				goto keep_locked;
 			case PAGE_ACTIVATE:
 				goto activate_locked;
 			case PAGE_SUCCESS:
+
+				// hermit
+				// swap out a page,
+				// but it may still waiting for the writ back
+				accum_adc_time_stat(ADC_SWAPOUT_LATENCY, get_cycles_end() - swap_out_ts );
+
 				if (PageWriteback(page))
 					goto keep;
 				if (PageDirty(page))
@@ -1237,7 +1258,13 @@ keep:
 	}
 
 	mem_cgroup_uncharge_list(&free_pages);
+	
+	// hermit
+	tlb_flush_ts = get_cycles_start();
 	try_to_unmap_flush(&tlb_ubc);
+	accum_adc_time_stat(ADC_SWAP_TLB_FLUSH_LATENCY_2,
+			get_cycles_end() - tlb_flush_ts);
+
 	free_hot_cold_page_list(&free_pages, true);
 
 	list_splice(&ret_pages, page_list);
