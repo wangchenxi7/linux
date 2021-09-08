@@ -1259,7 +1259,7 @@ keep:
 
 	mem_cgroup_uncharge_list(&free_pages);
 	
-	// hermit
+	// hermit , what to unmap and flush ?
 	tlb_flush_ts = get_cycles_start();
 	try_to_unmap_flush(&tlb_ubc);
 	accum_adc_time_stat(ADC_SWAP_TLB_FLUSH_LATENCY_2,
