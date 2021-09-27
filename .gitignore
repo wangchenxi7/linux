@@ -49,7 +49,7 @@
 *.zst
 Module.symvers
 modules.order
-
+modules.builtin
 #
 # Top-level generic files
 #
@@ -96,6 +96,7 @@ modules.order
 !.gitattributes
 !.gitignore
 !.mailmap
+!.config
 
 #
 # Generated include files
