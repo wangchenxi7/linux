@@ -591,12 +591,21 @@ void try_to_unmap_flush(void)
 	tlb_ubc->writable = false;
 }
 
-/* Flush iff there are potentially writable TLB entries that can race with IO */
+/** 
+ * Flush iff there are potentially writable TLB entries that can race with IO 
+ * 
+ * [?] Why only does this for dirty page swappint out ?
+ * 
+ * [?] What does the tlb_ubc->writable mean ? 
+ * 
+ * [?] Which pte to be shootdown ? there is no parameters ?
+ * 
+ */
 void try_to_unmap_flush_dirty(void)
 {
 	struct tlbflush_unmap_batch *tlb_ubc = &current->tlb_ubc;
 
-	if (tlb_ubc->writable)
+	if (tlb_ubc->writable)  // if any TLB entry is writable, shootdown them before paging out ?
 		try_to_unmap_flush();
 }
 

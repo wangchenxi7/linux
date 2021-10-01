@@ -1490,8 +1490,8 @@ free_it:
 		if (unlikely(PageTransHuge(page)))
 			(*get_compound_page_dtor(page))(page);
 		else
-			list_add(&page->lru, &free_pages);
-		continue;
+			list_add(&page->lru, &free_pages);  // the page is returned to freelist
+		continue; //  continue to relcaim pages. If this is a clean page, no TLB shootdown ?
 
 activate_locked_split:
 		/*
@@ -1524,7 +1524,7 @@ keep:
 	pgactivate = stat->nr_activate[0] + stat->nr_activate[1];
 
 	mem_cgroup_uncharge_list(&free_pages);
-	try_to_unmap_flush();
+	try_to_unmap_flush();  // delayed TLB shootdown. for dirty page, this is duplicated ?
 	free_unref_page_list(&free_pages);
 
 	list_splice(&ret_pages, page_list);

@@ -4,12 +4,18 @@
 
 #include <linux/cpumask.h>
 
+/**
+ * Why not record which pte to be shootdown ?
+ * 
+ * Or each page contains such a structure recording which cpu accessed it ?
+ * 
+ */
 struct arch_tlbflush_unmap_batch {
 	/*
 	 * Each bit set is a CPU that potentially has a TLB entry for one of
 	 * the PFNs being flushed..
 	 */
-	struct cpumask cpumask;
+	struct cpumask cpumask; 
 };
 
 #endif /* _ARCH_X86_TLBBATCH_H */
