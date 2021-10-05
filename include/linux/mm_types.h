@@ -70,6 +70,7 @@ struct page {
 					 * updated asynchronously */
 	/*
 	 * Five words (20/40 bytes) are available in this union.
+	 * For Intel X86_64, word size is 64 bits.
 	 * WARNING: bit 0 of the first word is used for PageTail(). That
 	 * means the other users of this union MUST NOT use the bit to
 	 * avoid collision and false-positive PageTail().
@@ -386,7 +387,7 @@ struct mm_struct {
 #endif
 		unsigned long task_size;	/* size of task vm space */
 		unsigned long highest_vm_end;	/* highest vma end address */
-		pgd_t * pgd;
+		pgd_t * pgd;	/* points to the first pgd entry. */
 
 #ifdef CONFIG_MEMBARRIER
 		/**

@@ -149,8 +149,8 @@ static inline unsigned long build_cr3_noflush(pgd_t *pgd, u16 asid)
 #endif
 
 struct tlb_context {
-	u64 ctx_id;
-	u64 tlb_gen;
+	u64 ctx_id;  // the PCID/ASID ?
+	u64 tlb_gen; // What's the meaning of TLB generation ?
 };
 
 struct tlb_state {
@@ -165,7 +165,7 @@ struct tlb_state {
 	 * when CR3 and loaded_mm would otherwise be inconsistent.  This
 	 * is for nmi_uaccess_okay()'s benefit.
 	 */
-	struct mm_struct *loaded_mm;
+	struct mm_struct *loaded_mm;  // load the page table from mm_struct->pgd
 
 #define LOADED_MM_SWITCHING ((struct mm_struct *)1UL)
 
@@ -221,8 +221,8 @@ struct tlb_state {
 
 	/*
 	 * This is a list of all contexts that might exist in the TLB.
-	 * There is one per ASID that we use, and the ASID (what the
-	 * CPU calls PCID) is the index into ctxts.
+	 * There is one per ASID, Address Space ID, that we use, and 
+	 * the ASID (what the CPU calls PCID) is the index into ctxts.
 	 *
 	 * For each context, ctx_id indicates which mm the TLB's user
 	 * entries came from.  As an invariant, the TLB will never
@@ -602,7 +602,7 @@ static inline u64 inc_mm_tlb_gen(struct mm_struct *mm)
 static inline void arch_tlbbatch_add_mm(struct arch_tlbflush_unmap_batch *batch,
 					struct mm_struct *mm)
 {
-	inc_mm_tlb_gen(mm);
+	inc_mm_tlb_gen(mm);  // [?] What's the meaning of tlb flushing gen ?
 	cpumask_or(&batch->cpumask, &batch->cpumask, mm_cpumask(mm));
 }
 

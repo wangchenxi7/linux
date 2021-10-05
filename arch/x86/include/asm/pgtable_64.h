@@ -85,7 +85,8 @@ static inline void native_pmd_clear(pmd_t *pmd)
 static inline pte_t native_ptep_get_and_clear(pte_t *xp)
 {
 #ifdef CONFIG_SMP
-	return native_make_pte(xchg(&xp->pte, 0));
+	// store 0 into xp->pte, if success, return the origial value
+	return native_make_pte(xchg(&xp->pte, 0));  
 #else
 	/* native_local_ptep_get_and_clear,
 	   but duplicated because of cyclic dependency */

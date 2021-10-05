@@ -594,7 +594,8 @@ void try_to_unmap_flush(void)
 /** 
  * Flush iff there are potentially writable TLB entries that can race with IO 
  * 
- * [?] Why only does this for dirty page swappint out ?
+ * [x] Why only does this for dirty page swappint out ?
+ * 	In order to prevent the racing between pageout (page->disk) and write (CPU -> page).
  * 
  * [?] What does the tlb_ubc->writable mean ? 
  * 
