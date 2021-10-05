@@ -24,6 +24,9 @@ typedef struct { pteval_t pte; } pte_t;
 #define EPTE_GEN_UNCACHED	(0x1)
 #define EPTE_GEN_MIN		(0x2)
 
+// VMWare IPI opt
+// 4 bytes
+// the purpose of this structure?
 typedef union {
 	struct {
 		unsigned short sw_young : 1;

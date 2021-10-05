@@ -208,7 +208,9 @@ static inline void native_cpuid(unsigned int *eax, unsigned int *ebx,
 
 static inline void native_load_cr3_no_invd(pgd_t *pgdir)
 {
-	native_write_cr3(__pa(pgdir) | (1ULL << 63));
+	// why set the highest bit to 1 ?
+	// used as some flag ?
+	native_write_cr3(__pa(pgdir) | (1ULL << 63)); 
 }
 
 static inline void load_cr3(pgd_t *pgdir)

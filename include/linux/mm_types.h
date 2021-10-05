@@ -64,7 +64,7 @@ struct page {
 			pgoff_t index;		/* Our offset within mapping. */
 			void *freelist;		/* sl[aou]b first free object */
 			/* page_deferred_list().prev	-- second tail page */
-			epte_t *eptes;		/* extended PTEs */
+			epte_t *eptes;		/* extended PTEs, used for private PTE detection */
 		};
 
 		union {

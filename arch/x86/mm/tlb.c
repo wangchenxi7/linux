@@ -103,6 +103,12 @@ static inline pgd_t native_pfn_pgd(unsigned long page_nr, pgprot_t pgprot)
 				massage_pgprot(pgprot));
 }
 
+
+/**
+ * VMWare IPI, 
+ * Pushing the fake pgd into cr3 register to let the hardware load the fake PTE into TLB.
+ * 
+ */
 void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 		      pmd_t *pmd, int n_entries)
 {
@@ -110,14 +116,14 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	pud_t *s_pud, *s_pudp;
 	pmd_t *s_pmd, *s_pmdp;
 	pte_t *s_ptep, *s_pte, *ptep;
-	epte_t *eptep;
+	epte_t *eptep;	// ? the fake PTE ?
 	bool restore_pgd, restore_pud;
 	int i, cpu, generation;
 	int first = 0;
 	int last = -1;
 	unsigned long last_ptep, start_addr;
 	pgprot_t pgprot = __pgprot(_PAGE_ACCESSED | _PAGE_RW | _PAGE_PRESENT |
-				   _PAGE_USER);
+				   _PAGE_USER);  // how to know this page is user space ?
 	spinlock_t *ptl;
 
 	addr &= PAGE_MASK;
@@ -128,7 +134,7 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	preempt_disable();
 
 	ptep = pte_offset_map(pmd, addr);
-	eptep = get_eptep(ptep);
+	eptep = get_eptep(ptep);  // page->epte , who filld this field ?
 	if (unlikely(!eptep)) {
 		pte_unmap(ptep);
 		goto out;
@@ -138,26 +144,26 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	__native_flush_tlb_single(addr);
 #endif
 
-	s_ptep = this_cpu_read(cpu_tlbstate.s_ptep);
+	s_ptep = this_cpu_read(cpu_tlbstate.s_ptep);  // get this core's fake page table
 	s_pmdp = this_cpu_read(cpu_tlbstate.s_pmdp);
 	s_pudp = this_cpu_read(cpu_tlbstate.s_pudp);
-	s_pgdp = this_cpu_read(cpu_tlbstate.s_pgdp);
+	s_pgdp = this_cpu_read(cpu_tlbstate.s_pgdp);  // fake page  table, pgd start pointer
 
-	s_pgd = s_pgdp + pgd_index(addr);
+	s_pgd = s_pgdp + pgd_index(addr); // Calculate the fake pgd entry address.
 
 	cpu = smp_processor_id();
-	restore_pgd = !pgd_present(*s_pgd);
+	restore_pgd = !pgd_present(*s_pgd);  // ? the first time accessing the s_pgd ?
 	if (restore_pgd)
 		native_set_pgd(s_pgd,
-			native_pfn_pgd(__pa(s_pudp) >> PAGE_SHIFT, pgprot));
+			native_pfn_pgd(__pa(s_pudp) >> PAGE_SHIFT, pgprot)); // create pgd to the pud
 	s_pud = pud_offset(s_pgd, addr);
 	restore_pud = !pud_present(*s_pud);
 	if (restore_pud)
 		native_set_pud(s_pud,
-			native_pfn_pud(__pa(s_pmdp) >> PAGE_SHIFT, pgprot));
+			native_pfn_pud(__pa(s_pmdp) >> PAGE_SHIFT, pgprot)); // create pud to the pmd
 	s_pmd = pmd_offset(s_pud, addr);
 	native_set_pmd_at(mm, addr, s_pmd,
-			native_pfn_pmd(__pa(s_ptep) >> PAGE_SHIFT, pgprot));
+			native_pfn_pmd(__pa(s_ptep) >> PAGE_SHIFT, pgprot)); // create pmd to the pte
 
 	spin_lock(ptl);
 	native_irq_disable();
@@ -166,9 +172,12 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	for (i = 0, s_pte = s_ptep + pte_index(addr);
 	     i < n_entries;
 	     i++, addr += PAGE_SIZE, ptep++, s_pte++, eptep++) {
-		pte_t pte = *ptep;
+		pte_t pte = *ptep; // get  the pte value of the primary page table
 		epte_t epte = *eptep;
 
+		// what does these check mean ?
+		// can push to tlb ?
+		// young ?
 		if (!arch_can_push_to_tlb(pte) || pte_young(pte) ||
 		    epte.generation == EPTE_GEN_DISABLED) {
 			continue;
@@ -181,7 +190,7 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 		//epte.sw_young = 1;
 		pte = pte_mkyoung(pte);
 
-		native_set_pte_at(mm, addr, s_pte, pte);
+		native_set_pte_at(mm, addr, s_pte, pte); // set the value of pte to s_pte
 		if (epte.generation == EPTE_GEN_UNCACHED)
 			epte.cpu_plus_one = cpu + 1;
 		else if (epte.cpu_plus_one != cpu + 1)
@@ -195,9 +204,12 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	if (last < 0)
 		goto out_irq_enable;
 
-	native_load_cr3_no_invd(s_pgdp); /* implicit barrier */
+	native_load_cr3_no_invd(s_pgdp); /* implicit barrier ? Load the fake pgd into cr3 */
 	addr = start_addr + first * PAGE_SIZE;
 
+	// ? What is this loop for ?
+	// set the s_pte to 0 ? 
+	// the tlb pushing is done ? how can we know this ?
 	for (i = first, s_pte = s_ptep + pte_index(addr);
 	     i <= last;
 	     i++, addr += PAGE_SIZE, s_pte++) {
@@ -229,7 +241,7 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 out_irq_enable:
 	native_irq_enable();
 out:
-	preempt_enable();
+	preempt_enable();  // ? enable preempt here ? the hardware page table walk is done ?
 }
 
 /*

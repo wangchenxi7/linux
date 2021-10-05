@@ -506,7 +506,7 @@ static inline epte_t *get_eptep(pte_t *ptep)
 {
 	struct page *page = virt_to_page((unsigned long)ptep);
 
-	if (!PageHasEPTES(page))
+	if (!PageHasEPTES(page))  // what does this flag mean ?
 		return NULL;
 
 	return &page->eptes[((unsigned long)(ptep) & ~PAGE_MASK) / 8];
