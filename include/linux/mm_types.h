@@ -410,7 +410,7 @@ struct mm_struct {
 #endif
 		unsigned long task_size;	/* size of task vm space */
 		unsigned long highest_vm_end;	/* highest vma end address */
-		pgd_t * pgd;
+		pgd_t * pgd;	// the root pointer of the PageTable
 
 #ifdef CONFIG_MEMBARRIER
 		/**
@@ -581,7 +581,7 @@ struct mm_struct {
 	unsigned long cpu_bitmap[];
 };
 
-extern struct mm_struct init_mm;
+extern struct mm_struct init_mm;  // ? what's the purpose of this mm_struct ?
 
 /* Pointer magic because the dynamic array size confuses some compilers. */
 static inline void mm_init_cpumask(struct mm_struct *mm)

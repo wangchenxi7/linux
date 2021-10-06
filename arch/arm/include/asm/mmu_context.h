@@ -119,10 +119,10 @@ switch_mm(struct mm_struct *prev, struct mm_struct *next,
 	if (cache_ops_need_broadcast() &&
 	    !cpumask_empty(mm_cpumask(next)) &&
 	    !cpumask_test_cpu(cpu, mm_cpumask(next)))
-		__flush_icache_all();
+		__flush_icache_all();  // ? what's the purpose of flushing icache ?
 
 	if (!cpumask_test_and_set_cpu(cpu, mm_cpumask(next)) || prev != next) {
-		check_and_switch_context(next, tsk);
+		check_and_switch_context(next, tsk); // switched to a new cpu, do context switching
 		if (cache_is_vivt())
 			cpumask_clear_cpu(cpu, mm_cpumask(prev));
 	}

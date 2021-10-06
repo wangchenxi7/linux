@@ -973,7 +973,10 @@ static int exec_mmap(struct mm_struct *mm)
 	int ret;
 
 	/* Notify parent that we're no longer interested in the old VM */
-	tsk = current;
+	// the current always points to the running task_struct of this core.
+	// include/linux/sched.h
+	// #define current (0+current_set[smp_processor_id()])
+	tsk = current; 
 	old_mm = current->mm;
 	exec_mm_release(tsk, old_mm);
 	if (old_mm)
@@ -1014,7 +1017,7 @@ static int exec_mmap(struct mm_struct *mm)
 	 */
 	if (!IS_ENABLED(CONFIG_ARCH_WANT_IRQS_OFF_ACTIVATE_MM))
 		local_irq_enable();
-	activate_mm(active_mm, mm);
+	activate_mm(active_mm, mm);  // invoke into switch_mm
 	if (IS_ENABLED(CONFIG_ARCH_WANT_IRQS_OFF_ACTIVATE_MM))
 		local_irq_enable();
 	tsk->mm->vmacache_seqnum = 0;

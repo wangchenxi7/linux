@@ -59,11 +59,24 @@ static inline void cr4_clear_bits(unsigned long mask)
  */
 #define TLB_NR_DYN_ASIDS	6
 
+/**
+ * @brief Why don't merge this information into hte tlb_state ?
+ * 
+ */
 struct tlb_context {
 	u64 ctx_id;
 	u64 tlb_gen;
 };
 
+
+/**
+ * @brief Maintain the excuting process's TLB states.
+ * 
+ * Why does the tlb_state may not match the current->active_mm ?
+ * 
+ * What's the connection between tlb_state, current->active_mm and CR3 ?
+ * 
+ */
 struct tlb_state {
 	/*
 	 * cpu_tlbstate.loaded_mm should match CR3 whenever interrupts
@@ -86,7 +99,7 @@ struct tlb_state {
 		unsigned long		last_user_mm_ibpb;
 	};
 
-	u16 loaded_mm_asid;
+	u16 loaded_mm_asid; // asid should be the same as pcid
 	u16 next_asid;
 
 	/*
@@ -254,7 +267,7 @@ static inline void arch_tlbbatch_add_mm(struct arch_tlbflush_unmap_batch *batch,
 					struct mm_struct *mm)
 {
 	inc_mm_tlb_gen(mm);
-	cpumask_or(&batch->cpumask, &batch->cpumask, mm_cpumask(mm));
+	cpumask_or(&batch->cpumask, &batch->cpumask, mm_cpumask(mm)); // gathering the cpu_bitmap info from sharing process
 }
 
 extern void arch_tlbbatch_flush(struct arch_tlbflush_unmap_batch *batch);
