@@ -1121,6 +1121,10 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 	arch_post_acpi_subsys_init();
 	kcsan_init();
 
+
+	// Hermit
+	init_sw_tlb(true);
+
 	/* Do the rest non-__init'ed, we're now alive */
 	arch_call_rest_init();
 

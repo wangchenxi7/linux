@@ -18,6 +18,10 @@
 
 #include "mm_internal.h"
 
+// Hermit
+#include <asm/pgalloc.h>
+
+
 #ifdef CONFIG_PARAVIRT
 # define STATIC_NOPV
 #else
@@ -1267,3 +1271,321 @@ static int __init create_tlb_single_page_flush_ceiling(void)
 	return 0;
 }
 late_initcall(create_tlb_single_page_flush_ceiling);
+
+
+
+
+//
+// Hermit support
+//
+
+// 
+// functions to build the fake PageTable value
+static inline pte_t native_pfn_pte(unsigned long page_nr, pgprot_t pgprot)
+{
+	return native_make_pte(((phys_addr_t)page_nr << PAGE_SHIFT) |
+		     massage_pgprot(pgprot));
+}
+
+static inline pmd_t native_pfn_pmd(unsigned long page_nr, pgprot_t pgprot)
+{
+	return native_make_pmd(((phys_addr_t)page_nr << PAGE_SHIFT) |
+		     massage_pgprot(pgprot));
+}
+
+static inline pud_t native_pfn_pud(unsigned long page_nr, pgprot_t pgprot)
+{
+	return native_make_pud(((phys_addr_t)page_nr << PAGE_SHIFT) |
+				massage_pgprot(pgprot));
+}
+
+static inline p4d_t native_pfn_p4d(unsigned long page_nr, pgprot_t pgprot)
+{
+	return native_make_p4d(((phys_addr_t)page_nr << PAGE_SHIFT) |
+				massage_pgprot(pgprot));
+}
+
+
+static inline pgd_t native_pfn_pgd(unsigned long page_nr, pgprot_t pgprot)
+{
+	return native_make_pgd(((phys_addr_t)page_nr << PAGE_SHIFT) |
+				massage_pgprot(pgprot));
+}
+
+
+/**
+ * VMWare IPI, 
+ * Pushing the fake pgd into cr3 register to let the hardware load the fake PTE into TLB.
+ * 
+ */
+void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
+		      pmd_t *pmd, int n_entries)
+{
+	pgd_t *s_pgd, *s_pgdp; // the secondary page talbe
+	p4d_t *s_p4d, *s_p4dp;
+	pud_t *s_pud, *s_pudp;
+	pmd_t *s_pmd, *s_pmdp;
+	pte_t *s_ptep, *s_pte, *ptep;
+	//epte_t *eptep;	// The extra information of PTE
+	bool restore_pgd, restore_p4d, restore_pud;
+	int i, cpu;
+	int first = 0;
+	int last = -1;
+	unsigned long start_addr;
+	pgprot_t pgprot = __pgprot(_PAGE_ACCESSED | _PAGE_RW | _PAGE_PRESENT |
+				   _PAGE_USER);  // how to know this page is user space ?
+	spinlock_t *ptl;
+
+	addr &= PAGE_MASK;
+	start_addr = addr;
+
+	ptl = pte_lockptr(mm, pmd);
+
+	preempt_disable();  // disable preempt before inserting the fake pte
+
+	ptep = pte_offset_map(pmd, addr);
+	// eptep = get_eptep(ptep);  // page->epte, get the extra info of this PTE 
+	// if (unlikely(!eptep)) {
+	// 	pte_unmap(ptep);
+	// 	goto out;
+	// }
+#if 0
+	/* To be really safe, the following should be enabled */
+	__native_flush_tlb_single(addr);
+#endif
+
+	// Get the pointers to the page containing each PageTable level.
+	s_ptep = this_cpu_read(cpu_tlbstate.s_ptep);  // get this core's fake page table
+	s_pmdp = this_cpu_read(cpu_tlbstate.s_pmdp);
+	s_pudp = this_cpu_read(cpu_tlbstate.s_pudp);
+	s_p4dp = this_cpu_read(cpu_tlbstate.s_p4dp);
+	s_pgdp = this_cpu_read(cpu_tlbstate.s_pgdp);  // fake page  table, pgd start pointer
+
+	s_pgd = s_pgdp + pgd_index(addr); // Calculate the fake pgd entry address.
+
+	cpu = smp_processor_id();
+	restore_pgd = !pgd_present(*s_pgd);  // ? the first time accessing the s_pgd ?
+	if (restore_pgd){
+		// create a pgd point to the page of the created pud
+		native_set_pgd(s_pgd, native_pfn_pgd(__pa(s_pudp) >> PAGE_SHIFT, pgprot)); 
+	}
+
+	s_p4d = p4d_offset(s_pgd, addr);
+	restore_p4d = !p4d_present(*s_p4d);
+	if(restore_p4d){
+		// Create p4d to the page containing pud.
+		native_set_p4d(s_p4d, native_pfn_p4d(__pa(s_pudp) >> PAGE_SHIFT, pgprot)); 
+	}
+
+	s_pud = pud_offset(s_p4d, addr);
+	restore_pud = !pud_present(*s_pud);
+	if (restore_pud){
+		// create pud to the page of pmd
+		native_set_pud(s_pud, native_pfn_pud(__pa(s_pmdp) >> PAGE_SHIFT, pgprot)); 
+	}
+
+	s_pmd = pmd_offset(s_pud, addr);
+	// create pmd to the pte
+	native_set_pmd(s_pmd, native_pfn_pmd(__pa(s_ptep) >> PAGE_SHIFT, pgprot)); 
+
+	spin_lock(ptl);
+	native_irq_disable();
+	//generation = atomic_read(&mm->flush_cnt);
+
+	for (i = 0, s_pte = s_ptep + pte_index(addr);
+	     i < n_entries;
+	     i++, addr += PAGE_SIZE, ptep++, s_pte++) {
+		pte_t pte = *ptep; // get  the pte value of the primary page table
+		//epte_t epte = *eptep;
+
+		// Skip the pte or not ?
+		// arch_can_push_to_tlb, what flags to check ?
+		// pte_young : the _PAGE_ACCESSED is already set. 
+		if (!arch_can_push_to_tlb(pte) || pte_young(pte) ){
+		    //epte.generation == EPTE_GEN_DISABLED) {
+			continue;
+		}
+
+		if (last < 0)
+			first = i;
+		last = i;
+
+		//epte.sw_young = 1;
+
+		// prepare the pte value for the s_pte
+		// set the _PAGE_ACCESSED of this pte.
+		pte = pte_mkyoung(pte); 
+
+		// set the value of pte to s_pte
+		native_set_pte(s_pte, pte); 
+		// if (epte.generation == EPTE_GEN_UNCACHED)
+		// 	epte.cpu_plus_one = cpu + 1;
+		// else if (epte.cpu_plus_one != cpu + 1)
+		// 	epte.cpu_plus_one = 0;
+
+		// epte.generation = generation;
+		// __set_epte(eptep, epte);
+	}
+
+	// unlock and unmap the ptep
+	// ?? fix me ??
+	// the n_entries must be 1 here ?
+	//pte_unmap_unlock(ptep-1, ptl);
+
+	spin_unlock(ptl);
+	for(i = 0; i < n_entries; i++){
+		pte_unmap(ptep - i -1);	// unmap the pte
+	}
+
+	if (last < 0)
+		goto out_irq_enable;
+
+	// implicit barrier ? 
+	// Load the fake pgd into cr3
+	native_load_cr3_no_invd(s_pgdp);
+	addr = start_addr + first * PAGE_SIZE;
+
+	// Force TLB to load the pte entries by accessing them
+	for (i = first, s_pte = s_ptep + pte_index(addr);
+	     i <= last;
+	     i++, addr += PAGE_SIZE, s_pte++) {
+		if (!pte_present(*s_pte))
+			continue;
+
+		stac();
+		kasan_disable_current();
+		__READ_ONCE(*(__user int *)addr);  // trigger PageTable walk
+		kasan_enable_current();
+		clac();
+
+		barrier();
+
+		// clear the fake pte value
+		// Assumption, when accessing this invalidate pte,
+		// hardware will clear the cached PageTable
+		native_set_pte(s_pte, native_make_pte(0));
+	}
+	/* We can already release the lock */
+
+	barrier();
+	native_pmd_clear(s_pmd);
+	if (restore_pud)
+		native_pud_clear(s_pud);
+	if (restore_pgd)
+		native_pgd_clear(s_pgd);
+
+	// Restore the orinial pgd of the process into CR3
+	native_load_cr3_no_invd(mm->pgd); /* implicit barrier */
+
+	/* local_irq_restore(flags); */
+out_irq_enable:
+	native_irq_enable();
+//out:
+	preempt_enable();
+}
+
+
+
+
+/**
+ * @brief Allocate pages for the fake page table of each core. 
+ * 
+ * 
+ * @param primary : ? 
+ * @return int 
+ * 	0, success
+ * 	non-zero, failed
+ */
+int arch_init_sw_tlb(bool primary)
+{
+	// ?? fix me ??
+	// for kernel 5.14, the mm_struct can't be NULL for pgd allocation ?
+	// Allocate a page for each page table level.
+	pgd_t *s_pgdp = pgd_alloc(NULL);
+	p4d_t *s_p4dp = p4d_alloc_one(NULL, 0);
+	pud_t *s_pudp = pud_alloc_one(NULL, 0);
+	pmd_t *s_pmdp = pmd_alloc_one(NULL, 0);
+	pte_t *s_ptep = pte_alloc_one_kernel(NULL);
+
+	if (!s_pgdp || !s_p4dp || !s_pudp || !s_pmdp || !s_ptep)
+		goto err;
+
+	this_cpu_write(cpu_tlbstate.s_pgdp, s_pgdp);
+	this_cpu_write(cpu_tlbstate.s_p4dp, s_p4dp);
+	this_cpu_write(cpu_tlbstate.s_pudp, s_pudp);
+	this_cpu_write(cpu_tlbstate.s_pmdp, s_pmdp);
+	this_cpu_write(cpu_tlbstate.s_ptep, s_ptep);
+
+	//this_cpu_write(cpu_tlbstate.generation, 0);
+
+	// ?? fix me ??
+	// what's for ?
+	if (primary){
+		// register_task_migration_notifier(&tlb_migrate);
+
+		// ?? fix ??
+		pr_warn("%s, Do we need to do something special for the primary core init ?\n",
+			__func__);
+
+	}
+
+	return 0;
+err:
+	pr_err("%s, allocate for fake page table failed.\n", __func__);
+
+	arch_deinit_sw_tlb();
+	return -EINVAL;
+}
+
+void arch_deinit_sw_tlb(void)
+{
+	pte_free(NULL, virt_to_page(this_cpu_read(cpu_tlbstate.s_ptep)));
+	pmd_free(NULL, this_cpu_read(cpu_tlbstate.s_pmdp));
+	pud_free(NULL, this_cpu_read(cpu_tlbstate.s_pudp));
+	p4d_free(NULL, this_cpu_read(cpu_tlbstate.s_p4dp));
+	pgd_free(NULL, this_cpu_read(cpu_tlbstate.s_pgdp));
+
+	this_cpu_write(cpu_tlbstate.s_pgdp, NULL);
+	this_cpu_write(cpu_tlbstate.s_p4dp, NULL);
+	this_cpu_write(cpu_tlbstate.s_pudp, NULL);
+	this_cpu_write(cpu_tlbstate.s_pmdp, NULL);
+	this_cpu_write(cpu_tlbstate.s_ptep, NULL);
+}
+
+
+/**
+ * @brief Init the fake PageTable for eachy core.
+ * 
+ * @param primary  
+ * 	1 : init the fake PageTable for the CPU#0. 
+ * 	0 : init the fake PageTable for other CPUs.
+ * 
+ * @return int
+ * 	0 : success
+ * 	other : failed. 
+ */
+int init_sw_tlb(bool primary)
+{
+	int r = -EINVAL;
+
+	if (arch_init_sw_tlb(primary))
+		goto out;
+	if (primary) {
+		// ?? fix me ??
+		// What's this for ?
+		// tlb_info_cachep = KMEM_CACHE(flush_tlb_info_multi, SLAB_PANIC);
+		// mmu_gather_cachep = KMEM_CACHE(mmu_gather, SLAB_PANIC);
+
+		pr_warn("%s, initialize the fake PageTable for primary CPU.\n", __func__);
+	}
+
+	r = 0;
+out:
+	return r;
+}
+
+void deinit_sw_tlb(void)
+{
+	// the x86 processor
+	arch_deinit_sw_tlb();
+}

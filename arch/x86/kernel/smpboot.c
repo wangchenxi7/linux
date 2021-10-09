@@ -215,8 +215,15 @@ static void smp_callin(void)
 
 static int cpu0_logical_apicid;
 static int enable_start_cpu0;
-/*
+
+
+/**
  * Activate a secondary processor.
+ * 
+ * For Symetric CPUs, the CPUs are boot in a sequence.
+ * First boot the CPU#0,
+ * and then, boot up the rest of other cores via this function.
+ * It means this function will be invoked many times.
  */
 static void notrace start_secondary(void *unused)
 {
@@ -267,6 +274,10 @@ static void notrace start_secondary(void *unused)
 	x86_cpuinit.setup_percpu_clockev();
 
 	wmb();
+	// Hermit
+	// Build fake PageTable For the secondary cores
+	init_sw_tlb(false);
+
 	cpu_startup_entry(CPUHP_AP_ONLINE_IDLE);
 }
 

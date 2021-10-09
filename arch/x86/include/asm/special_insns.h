@@ -54,6 +54,17 @@ static inline void native_write_cr3(unsigned long val)
 	asm volatile("mov %0,%%cr3": : "r" (val) : "memory");
 }
 
+
+//
+// Hermit
+static inline void native_load_cr3_no_invd(pgd_t *pgdir)
+{
+	// why set the highest bit to 1 ? 
+	// Making it a Kernel address space ?
+	native_write_cr3(__pa(pgdir) | (1ULL << 63)); 
+}
+
+
 static inline unsigned long native_read_cr4(void)
 {
 	unsigned long val;

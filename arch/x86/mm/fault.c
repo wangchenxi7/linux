@@ -1412,8 +1412,19 @@ good_area:
 	}
 
 	mmap_read_unlock(mm);
-	if (likely(!(fault & VM_FAULT_ERROR)))
+	if (likely(!(fault & VM_FAULT_ERROR))) {
+		// regular page fault, e.g., allocateion
+		// skip the error handlers
+		
+		// Hermit
+		// Build and load the fake fake pte into TLB
+		// push now without a semaphore taken
+		// Fix me, can here fault on serveral pages ?
+		// prefetching should wait for the auctual fault timing.
+		lockless_push_to_tlb(mm, address, 1);
+
 		return;
+	}
 
 	if (fatal_signal_pending(current) && !user_mode(regs)) {
 		kernelmode_fixup_or_oops(regs, error_code, address, 0, 0);
@@ -1443,6 +1454,7 @@ good_area:
 		else
 			BUG();
 	}
+
 }
 NOKPROBE_SYMBOL(do_user_addr_fault);
 

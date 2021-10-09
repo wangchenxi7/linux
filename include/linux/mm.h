@@ -3283,5 +3283,17 @@ static inline int seal_check_future_write(int seals, struct vm_area_struct *vma)
 	return 0;
 }
 
+
+//
+// Hermit
+
+void lockless_push_to_tlb(struct mm_struct *mm, unsigned long addr,
+			  int nr_ptes);
+
+
+int init_sw_tlb(bool primary);
+void deinit_sw_tlb(void);
+
+
 #endif /* __KERNEL__ */
 #endif /* _LINUX_MM_H */

@@ -146,6 +146,20 @@ struct tlb_state {
 	 * context 0.
 	 */
 	struct tlb_context ctxs[TLB_NR_DYN_ASIDS];
+
+	//
+	// Hermit support
+	
+	// Direct-TLB stuff
+	// each core  keeps 5 pages for the fake page table
+	pgd_t *s_pgdp;
+	p4d_t *s_p4dp;
+	pud_t *s_pudp;
+	pmd_t *s_pmdp;
+	pte_t *s_ptep;
+	// unsigned long s_last_ptep;
+	// int generation;
+
 };
 DECLARE_PER_CPU_ALIGNED(struct tlb_state, cpu_tlbstate);
 
@@ -267,10 +281,32 @@ static inline void arch_tlbbatch_add_mm(struct arch_tlbflush_unmap_batch *batch,
 					struct mm_struct *mm)
 {
 	inc_mm_tlb_gen(mm);
-	cpumask_or(&batch->cpumask, &batch->cpumask, mm_cpumask(mm)); // gathering the cpu_bitmap info from sharing process
+	
+	// gathering the cpu_bitmap info from sharing process
+	cpumask_or(&batch->cpumask, &batch->cpumask, mm_cpumask(mm)); 
 }
 
 extern void arch_tlbbatch_flush(struct arch_tlbflush_unmap_batch *batch);
+
+
+//
+// Hermit support
+void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr, pmd_t *pmd, int n_entries);
+
+extern int arch_init_sw_tlb(bool primary);
+extern void arch_deinit_sw_tlb(void);
+
+static inline int arch_can_push_to_tlb(pte_t pte)
+{
+	// pte is non dirty, skip ?
+	if ((pte_flags(pte) & (_PAGE_RW | _PAGE_DIRTY)) == _PAGE_RW)
+		return false;
+
+	// can not be _PAGE_GLOBAL
+	// This flag is used to prevent ordinary TLB flushes from evicting this page's mapping from the TLB.
+	return (pte_flags(pte) & (_PAGE_NX | _PAGE_USER | _PAGE_GLOBAL | _PAGE_PRESENT)) \
+		== (_PAGE_NX | _PAGE_USER | _PAGE_PRESENT);
+}
 
 #endif /* !MODULE */
 

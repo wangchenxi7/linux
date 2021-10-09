@@ -421,6 +421,14 @@ static inline void _pgd_free(pgd_t *pgd)
 }
 #endif /* CONFIG_X86_PAE */
 
+/**
+ * @brief Allocate a page for the pgd 
+ * 	Make this function support NULL mm_struct.
+ * 
+ * 
+ * @param mm : the mm_struct of current process.
+ * @return pgd_t* : the address of the allocated page.
+ */
 pgd_t *pgd_alloc(struct mm_struct *mm)
 {
 	pgd_t *pgd;
@@ -432,7 +440,9 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
 	if (pgd == NULL)
 		goto out;
 
-	mm->pgd = pgd;
+	// assign for non null mm_strcut
+	if(mm) 
+		mm->pgd = pgd;
 
 	if (preallocate_pmds(mm, pmds, PREALLOCATED_PMDS) != 0)
 		goto out_free_pgd;

@@ -4621,7 +4621,7 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	vm_fault_t ret;
 
 	pgd = pgd_offset(mm, address);
-	p4d = p4d_alloc(mm, pgd, address);
+	p4d = p4d_alloc(mm, pgd, address);  // get or calculate
 	if (!p4d)
 		return VM_FAULT_OOM;
 
@@ -5466,4 +5466,25 @@ void ptlock_free(struct page *page)
 {
 	kmem_cache_free(page_ptl_cachep, page->ptl);
 }
-#endif
+#endif  // end of  USE_SPLIT_PTE_PTLOCKS && ALLOC_SPLIT_PTLOCKS
+
+
+//
+// Hermit support
+
+void lockless_push_to_tlb(struct mm_struct *mm, unsigned long addr,
+			  int nr_ptes)
+{
+	pmd_t *pmd;
+
+	if (nr_ptes == 0)
+		return;
+
+	pmd = mm_find_pmd(mm, addr);
+	if (unlikely(!pmd))
+		return;
+
+	// ?? fix me ??
+	// Can this function guarantte loading the entry into TLB buffer
+	arch_push_to_tlb(mm, addr, pmd, nr_ptes);
+}
