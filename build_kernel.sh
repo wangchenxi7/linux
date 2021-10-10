@@ -3,10 +3,10 @@
 
 ### Parameters
 
-version="-vmware-opt"
+version="4.15.0"
 #LocalVersion="Semeru"
 # Or remove the suffix
-LocalVersion="${version}"
+LocalVersion="-vmware-IPI"
 
 num_cores=`nproc --all`
 

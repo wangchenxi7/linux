@@ -17,6 +17,9 @@
 #include <asm/arch_hweight.h>
 #include <linux/debugfs.h>
 
+// Hermit
+#include <linux/hermit.h>
+
 /*
  *	Smarter SMP flushing macros.
  *		c/o Linus Torvalds.
@@ -169,19 +172,23 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	native_irq_disable();
 	generation = atomic_read(&mm->flush_cnt);
 
-	for (i = 0, s_pte = s_ptep + pte_index(addr);
-	     i < n_entries;
-	     i++, addr += PAGE_SIZE, ptep++, s_pte++, eptep++) {
+	for (i = 0, s_pte = s_ptep + pte_index(addr); i < n_entries; i++, addr += PAGE_SIZE, ptep++, s_pte++, eptep++) {
 		pte_t pte = *ptep; // get  the pte value of the primary page table
 		epte_t epte = *eptep;
 
 		// what does these check mean ?
 		// can push to tlb ?
 		// young ?
-		if (!arch_can_push_to_tlb(pte) || pte_young(pte) ||
-		    epte.generation == EPTE_GEN_DISABLED) {
+		if (!arch_can_push_to_tlb(pte) || pte_young(pte) || epte.generation == EPTE_GEN_DISABLED) {
 			continue;
 		}
+
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+		pr_warn("%s, core #%d fault on 0x%lx, pte 0x%lx \n \
+			 present? 0x%x, young? 0x%x, dirty? 0x%x \n",
+			__func__, cpu, addr, pte.pte, 
+			pte_present(pte), pte_young(pte), pte_dirty(pte));
+#endif
 
 		if (last < 0)
 			first = i;
@@ -198,6 +205,11 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 
 		epte.generation = generation;
 		__set_epte(eptep, epte);
+
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+		pr_warn("%s, pushed fake pte addr 0x%lx, val 0x%lx \n",
+			__func__, (size_t) s_pte, (size_t)(*s_pte).pte);
+#endif
 	}
 	pte_unmap_unlock(ptep-1, ptl);
 

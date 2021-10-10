@@ -17,6 +17,7 @@
 *.ko
 *.so
 *.so.dbg
+*.mod
 *.mod.c
 *.i
 *.lst
@@ -37,6 +38,7 @@ modules.builtin
 Module.symvers
 *.dwo
 *.su
+*.asn1.[ch]
 
 #
 # Top-level generic files
@@ -67,6 +69,7 @@ Module.symvers
 !.gitignore
 !.mailmap
 !.clang-format
+!.config
 
 #
 # Generated include files

@@ -73,6 +73,10 @@
 
 #include "internal.h"
 
+
+// Hermit
+#include <linux/hermit.h>
+
 #ifdef LAST_CPUPID_NOT_IN_PAGE_FLAGS
 #warning Unfortunate NUMA and NUMA Balancing config, growing page-frame for last_cpupid.
 #endif
@@ -2802,6 +2806,18 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	if (vma->vm_flags & VM_WRITE)
 		entry = pte_mkwrite(pte_mkdirty(entry));
 
+	// Hermit debug
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+	pr_warn("%s, #0 hanlded anonymous fault 0x%lx, newly created val 0x%lx,\n \
+		assigned prot 0x%lx,\n \
+		present? 0x%x, young? 0x%x, dirty? 0x%x \n",
+		__func__, address ,entry.pte,
+		pgprot_val(vma->vm_page_prot),
+		pte_present(entry), pte_young(entry), pte_dirty(entry) );
+
+#endif
+
+
 	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
 	if (!pte_none(*page_table))
 		goto release;
@@ -3031,6 +3047,19 @@ static int do_fault_around(struct vm_area_struct *vma, unsigned long *paddress,
 	return max_pgoff - pgoff + 1;
 }
 
+/**
+ * @brief Fault on non-anonymous page, read page fault.
+ * 
+ * @param mm 
+ * @param vma 
+ * @param paddress 
+ * @param pmd 
+ * @param pgoff 
+ * @param flags 
+ * @param orig_pte 
+ * @param nr_ptes 
+ * @return int 
+ */
 static int do_read_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		unsigned long *paddress, pmd_t *pmd,
 		pgoff_t pgoff, unsigned int flags, pte_t orig_pte,
@@ -3073,6 +3102,16 @@ static int do_read_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	unlock_page(fault_page);
 unlock_out:
 	pte_unmap_unlock(pte, ptl);
+
+// Hermit debug
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+	pr_warn("%s, non-anonymous fault on 0x%lx, pte val 0x%lx,\n \
+		present? %x, young? %x, dirty? %x \n",
+		__func__, address, pte->pte,  
+		pte_present(*pte), pte_young(*pte), pte_dirty(*pte) );
+#endif
+
+
 	return ret;
 }
 
@@ -3136,6 +3175,15 @@ static int do_cow_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		 */
 		i_mmap_unlock_read(vma->vm_file->f_mapping);
 	}
+
+// Hermit debug
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+	pr_warn("%s, non-anonymous fault on 0x%lx, pte val 0x%lx,\n \
+		present? %x, young? %x, dirty? %x \n",
+		__func__, address, pte->pte,  
+		pte_present(*pte), pte_young(*pte), pte_dirty(*pte) );
+#endif
+
 	return ret;
 uncharge_out:
 	mem_cgroup_cancel_charge(new_page, memcg, false);
@@ -3204,6 +3252,14 @@ static int do_shared_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 
 	if (!vma->vm_ops->page_mkwrite)
 		file_update_time(vma->vm_file);
+// Hermit debug
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+	pr_warn("%s, non-anonymous fault on 0x%lx, pte val 0x%lx,\n \
+		present? %x, young? %x, dirty? %x \n",
+		__func__, address, pte->pte,  
+		pte_present(*pte), pte_young(*pte), pte_dirty(*pte) );
+#endif
+
 
 	return ret;
 }
