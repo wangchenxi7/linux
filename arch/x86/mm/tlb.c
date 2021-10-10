@@ -20,6 +20,7 @@
 
 // Hermit
 #include <asm/pgalloc.h>
+#include <linux/hermit.h>
 
 
 #ifdef CONFIG_PARAVIRT
@@ -1367,7 +1368,7 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	restore_pgd = !pgd_present(*s_pgd);  // ? the first time accessing the s_pgd ?
 	if (restore_pgd){
 		// create a pgd point to the page of the created pud
-		native_set_pgd(s_pgd, native_pfn_pgd(__pa(s_pudp) >> PAGE_SHIFT, pgprot)); 
+		native_set_pgd(s_pgd, native_pfn_pgd(__pa(s_p4dp) >> PAGE_SHIFT, pgprot)); 
 	}
 
 	s_p4d = p4d_offset(s_pgd, addr);
@@ -1392,6 +1393,22 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	native_irq_disable();
 	//generation = atomic_read(&mm->flush_cnt);
 
+#ifdef HERMIT_IPI_OPT_DEBUG
+	if (within_hermit_debug_range(addr)) {
+		pr_warn("%s, core %d  page fault on 0x%lx,\n \
+	pte value 0x%lx, present? %x, young? %x, dirty? %x \n \
+	fake pgd 0x%lx, p4d 0x%lx pud 0x%lx, pmd 0x%lx \n \
+	page addr s_pgdp 0x%lx, s_p4dp 0x%lx,\n \
+	s_pudp 0x%lx, s_pmdp 0x%lx, \n \
+	s_ptep 0x%lx \n",
+			__func__, cpu, addr, ptep->pte, pte_present(*ptep),
+			pte_young(*ptep), pte_dirty(*ptep), (size_t)s_pgd,
+			(size_t)s_p4d, (size_t)s_pud, (size_t)s_pmd,
+			(size_t)s_pgdp, (size_t)s_p4dp, (size_t)s_pudp,
+			(size_t)s_pmdp, (size_t)s_ptep);
+	}
+#endif
+
 	for (i = 0, s_pte = s_ptep + pte_index(addr);
 	     i < n_entries;
 	     i++, addr += PAGE_SIZE, ptep++, s_pte++) {
@@ -1400,7 +1417,9 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 
 		// Skip the pte or not ?
 		// arch_can_push_to_tlb, what flags to check ?
-		// pte_young : the _PAGE_ACCESSED is already set. 
+		// 
+		// The newly created PTE all has _ACCESS_BIT 0x20, _PRESNET_BIT 0x1
+		// So, we can't use these bits to do the skip ??
 		if (!arch_can_push_to_tlb(pte) || pte_young(pte) ){
 		    //epte.generation == EPTE_GEN_DISABLED) {
 			continue;
@@ -1425,6 +1444,16 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 
 		// epte.generation = generation;
 		// __set_epte(eptep, epte);
+
+		//debug
+#ifdef HERMIT_IPI_OPT_DEBUG
+		if (within_hermit_debug_range(addr)) {
+			pr_warn("%s, core #%d fault on 0x%lx,\n \
+		pushed fake pte addr 0x%lx, val 0x%lx ",
+				__func__, cpu, addr, (size_t)s_pte,
+				(size_t)s_pte->pte);
+		}
+#endif
 	}
 
 	// unlock and unmap the ptep
@@ -1528,6 +1557,18 @@ int arch_init_sw_tlb(bool primary)
 			__func__);
 
 	}
+
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+	pr_warn("%s, allocate fake PageTable for core %d : \n	s_pgdp 0x%lx, s_p4dp 0x%lx, s_pudp 0x%lx, s_pmdp 0x%lx, s_ptep 0x%lx \n",
+		__func__, smp_processor_id(), 
+		(size_t)this_cpu_read(cpu_tlbstate.s_pgdp),
+		(size_t)this_cpu_read(cpu_tlbstate.s_p4dp), 
+		(size_t)this_cpu_read(cpu_tlbstate.s_pudp),
+		(size_t)this_cpu_read(cpu_tlbstate.s_pmdp),
+		(size_t)this_cpu_read(cpu_tlbstate.s_ptep));
+#endif
+
+
 
 	return 0;
 err:

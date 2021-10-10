@@ -86,6 +86,10 @@
 #include "pgalloc-track.h"
 #include "internal.h"
 
+// Hermit
+#include <linux/hermit.h>
+
+
 #if defined(LAST_CPUPID_NOT_IN_PAGE_FLAGS) && !defined(CONFIG_COMPILE_TEST)
 #warning Unfortunate NUMA and NUMA Balancing config, growing page-frame for last_cpupid.
 #endif
@@ -3780,12 +3784,36 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	__SetPageUptodate(page);
 
 	entry = mk_pte(page, vma->vm_page_prot);
+
+// Hermit debug
+// Warning, the value of vma->vm_page_prot is  0x8000000000000025
+// so, the newly created PTE has _ACCESS_BIT 0x20 and PRESENT_BIT 0x1
+#ifdef HERMIT_IPI_OPT_DEBUG
+	if (within_hermit_debug_range(vmf->address)) {
+		pr_warn("%s, #0 hanlded anonymous fault 0x%lx, newly created val 0x%lx,\n \
+		assigned prot 0x%lx,\n \
+		present? 0x%x, young? 0x%x, dirty? 0x%x \n",
+			__func__, vmf->address, entry.pte,
+			pgprot_val(vma->vm_page_prot), pte_present(entry),
+			pte_young(entry), pte_dirty(entry));
+	}
+#endif
+
 	entry = pte_sw_mkyoung(entry);
 	if (vma->vm_flags & VM_WRITE)
 		entry = pte_mkwrite(pte_mkdirty(entry));
 
-	vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, vmf->address,
-			&vmf->ptl);
+
+// Hermit debug
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+	pr_warn("%s, #1 hanlded anonymous fault 0x%lx, newly created val 0x%lx,\n \
+		present? 0x%x, young? 0x%x, dirty? 0x%x \n",
+		__func__, vmf->address,entry.pte,  
+		pte_present(entry), pte_young(entry), pte_dirty(entry) );
+#endif
+
+	// lock the pmd and retrieve PTE.
+	vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, vmf->address,&vmf->ptl);
 	if (!pte_none(*vmf->pte)) {
 		update_mmu_cache(vma, vmf->address, vmf->pte);
 		goto release;
@@ -3806,12 +3834,36 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 	page_add_new_anon_rmap(page, vma, vmf->address, false);
 	lru_cache_add_inactive_or_unevictable(page, vma);
 setpte:
+	// we acuqired the pmd's ptl lock, repalce the vmf->pte with the created entry.
 	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
 
 	/* No need to invalidate - it was non-present before */
 	update_mmu_cache(vma, vmf->address, vmf->pte);
+
 unlock:
+	// Hermit
+	// clear the __ACCESS_BIT for newly created PTE
+	// We use this information to detect if this PTE is handled the first time.
+	// 1) We have to wait the finish of update_mmu_cache
+	// 2) the parameter of pte_mkold is passing by value
+	// 3) For x86, set_pte_at is a safer choice then assign the value directly.
+	entry = pte_mkold(*vmf->pte);
+	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
+
+	// we update the pte successfully, unlock and return.
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
+
+	// Hermit debug
+#ifdef HERMIT_IPI_OPT_DEBUG
+	if (within_hermit_debug_range(vmf->address)) {
+		pr_warn("%s, #3 hanlded anonymous fault 0x%lx, pte val 0x%lx,\n \
+		present? 0x%x, young? 0x%x, dirty? 0x%x \n",
+			__func__, vmf->address, vmf->pte->pte,
+			pte_present(*vmf->pte), pte_young(*vmf->pte),
+			pte_dirty(*vmf->pte));
+	}
+#endif
+
 	return ret;
 release:
 	put_page(page);
@@ -3961,7 +4013,7 @@ void do_set_pte(struct vm_fault *vmf, struct page *page, unsigned long addr)
 	pte_t entry;
 
 	flush_icache_page(vma, page);
-	entry = mk_pte(page, vma->vm_page_prot);
+	entry = mk_pte(page, vma->vm_page_prot);  // the created PTE has _ACCESS_BIT
 
 	if (prefault && arch_wants_old_prefaulted_pte())
 		entry = pte_mkold(entry);
@@ -4177,6 +4229,16 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 	unlock_page(vmf->page);
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		put_page(vmf->page);
+
+// Hermit debug
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+	pr_warn("%s, non anonymous fault 0x%lx, pte val 0x%lx,\n \
+		present? 0x%x, young? 0x%x, dirty? 0x%x \n",
+		__func__, vmf->address, vmf->pte->pte,  
+		pte_present(*vmf->pte), pte_young(*vmf->pte), pte_dirty(*vmf->pte) );
+#endif
+
+
 	return ret;
 }
 
@@ -4212,6 +4274,15 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 	put_page(vmf->page);
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		goto uncharge_out;
+
+// Hermit debug
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+	pr_warn("%s, non anonymous fault 0x%lx, pte val 0x%lx,\n \
+		present? 0x%x, young? 0x%x, dirty? 0x%x \n",
+		__func__, vmf->address, vmf->pte->pte,  
+		pte_present(*vmf->pte), pte_young(*vmf->pte), pte_dirty(*vmf->pte) );
+#endif
+
 	return ret;
 uncharge_out:
 	put_page(vmf->cow_page);
@@ -4532,9 +4603,13 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		 * pmd from under us anymore at this point because we hold the
 		 * mmap_lock read mode and khugepaged takes it in write mode.
 		 * So now it's safe to run pte_offset_map().
+		 * 
+		 * ? not hold the vm_fault->ptl yet, 
+		 * multiple threads can reach here and get the same pte ?
+		 * 
 		 */
-		vmf->pte = pte_offset_map(vmf->pmd, vmf->address);
-		vmf->orig_pte = *vmf->pte;
+		vmf->pte = pte_offset_map(vmf->pmd, vmf->address); // calculate the pte entry
+		vmf->orig_pte = *vmf->pte;	// keep a copy
 
 		/*
 		 * some architectures can have larger ptes than wordsize,
@@ -4545,9 +4620,11 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 		 * ptl lock held. So here a barrier will do.
 		 */
 		barrier();
-		if (pte_none(vmf->orig_pte)) {
+
+		// not a valid pte yeat, going to handle the page fault
+		if (pte_none(vmf->orig_pte)) { 
 			pte_unmap(vmf->pte);
-			vmf->pte = NULL;
+			vmf->pte = NULL; // reset to NULL
 		}
 	}
 
@@ -4620,6 +4697,13 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	p4d_t *p4d;
 	vm_fault_t ret;
 
+#ifdef HERMIT_IPI_OPT_DEBUG
+	if(within_hermit_debug_range(vmf.address)){
+		pr_warn("%s, fault on hermit_debug_range 0x%lx \n", __func__, vmf.address);
+	}
+
+#endif
+
 	pgd = pgd_offset(mm, address);
 	p4d = p4d_alloc(mm, pgd, address);  // get or calculate
 	if (!p4d)
@@ -4652,7 +4736,7 @@ retry_pud:
 		}
 	}
 
-	vmf.pmd = pmd_alloc(mm, vmf.pud, address);
+	vmf.pmd = pmd_alloc(mm, vmf.pud, address); // // get or calculate
 	if (!vmf.pmd)
 		return VM_FAULT_OOM;
 
