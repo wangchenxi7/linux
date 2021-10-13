@@ -22,6 +22,9 @@
 #include <asm/vsyscall.h>		/* emulate_vsyscall		*/
 #include <asm/vm86.h>			/* struct vm86			*/
 
+// Hermit
+#include <linux/hermit_inline.h>
+
 #define CREATE_TRACE_POINTS
 #include <asm/trace/exceptions.h>
 
@@ -1289,7 +1292,9 @@ good_area:
 	}
 
 	/* push now without a semaphore taken */
-	lockless_push_to_tlb(mm, pf_address, nr_ptes);
+	if( within_hermit_debug_range(pf_address) ){
+		lockless_push_to_tlb(mm, pf_address, nr_ptes);
+	}
 
 	check_v8086_mode(regs, address, tsk);
 }

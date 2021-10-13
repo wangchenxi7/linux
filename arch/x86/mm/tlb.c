@@ -19,6 +19,7 @@
 
 // Hermit
 #include <linux/hermit.h>
+#include <linux/hermit_inline.h>
 
 /*
  *	Smarter SMP flushing macros.
@@ -173,7 +174,22 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	generation = atomic_read(&mm->flush_cnt);
 
 	for (i = 0, s_pte = s_ptep + pte_index(addr); i < n_entries; i++, addr += PAGE_SIZE, ptep++, s_pte++, eptep++) {
-		pte_t pte = *ptep; // get  the pte value of the primary page table
+		
+		//pte_t pte = *ptep; // get  the pte value of the primary page table
+		
+		//
+		// Hermit debug
+		// do TLB should down
+		__flush_tlb_all();
+		// exchange the pte value to the previous
+		pte_t pte = exchange_pte_val_to_previous(addr, pmd);
+		if(ptep->pte != pte.pte){
+			//exchanged, print the debug infor
+			print_pte_virtaddr_value(pte, addr - PAGE_SIZE, "prev_page");
+		}
+
+		// end of debug
+		
 		epte_t epte = *eptep;
 
 		// what does these check mean ?
@@ -218,6 +234,18 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 
 	native_load_cr3_no_invd(s_pgdp); /* implicit barrier ? Load the fake pgd into cr3 */
 	addr = start_addr + first * PAGE_SIZE;
+
+
+	// Hermit debug
+	// Check the filled infor
+	
+	//exchanged, print the debug infor
+	// ?? fix me ??
+	// n_entries MUST be 1 
+	s_pte-=n_entries;
+	print_pte_virtaddr_value(*s_pte, addr, "cur_page");
+		
+
 
 	// ? What is this loop for ?
 	// set the s_pte to 0 ? 
