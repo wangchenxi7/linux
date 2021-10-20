@@ -27,6 +27,11 @@ SYM_CODE_START(machine_real_restart_asm)
 	movl	%eax, %ds
 	lgdtl	pa_tr_gdt
 
+	/* Disable PCIDE */
+	movl	%cr4, %eax
+	andl	$~X86_CR4_PCIDE, %eax
+	movl	%eax, %cr4
+
 	/* Disable paging to drop us out of long mode */
 	movl	%cr0, %eax
 	andl	$~X86_CR0_PG, %eax
@@ -94,6 +99,12 @@ SYM_CODE_END(machine_real_restart_asm)
 	.balign	16
 machine_real_restart_asm16:
 1:
+
+	/* Disable PCIDE */
+	movl	%cr4, %edx
+	andl	$~X86_CR4_PCIDE, %edx
+	movl	%eax, %cr4
+
 	xorl	%ecx, %ecx
 	movl	%cr0, %edx
 	andl	$0x00000011, %edx

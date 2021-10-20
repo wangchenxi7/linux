@@ -33,6 +33,10 @@
 #include <asm/kvm_para.h>		/* kvm_handle_async_pf		*/
 #include <asm/vdso.h>			/* fixup_vdso_exception()	*/
 
+
+// Hermit
+#include <linux/hermit_inline.h>
+
 #define CREATE_TRACE_POINTS
 #include <asm/trace/exceptions.h>
 
@@ -1421,7 +1425,11 @@ good_area:
 		// push now without a semaphore taken
 		// Fix me, can here fault on serveral pages ?
 		// prefetching should wait for the auctual fault timing.
-		lockless_push_to_tlb(mm, address, 1);
+
+		//debug
+		if(within_hermit_debug_range(address)){
+			lockless_push_to_tlb(mm, address, 1, flags);
+		}
 
 		return;
 	}

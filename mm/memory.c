@@ -3788,7 +3788,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 // Hermit debug
 // Warning, the value of vma->vm_page_prot is  0x8000000000000025
 // so, the newly created PTE has _ACCESS_BIT 0x20 and PRESENT_BIT 0x1
-#ifdef HERMIT_IPI_OPT_DEBUG
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAILS
 	if (within_hermit_debug_range(vmf->address)) {
 		pr_warn("%s, #0 hanlded anonymous fault 0x%lx, newly created val 0x%lx,\n \
 		assigned prot 0x%lx,\n \
@@ -3854,7 +3854,7 @@ unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 
 	// Hermit debug
-#ifdef HERMIT_IPI_OPT_DEBUG
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAILS
 	if (within_hermit_debug_range(vmf->address)) {
 		pr_warn("%s, #3 hanlded anonymous fault 0x%lx, pte val 0x%lx,\n \
 		present? 0x%x, young? 0x%x, dirty? 0x%x \n",
@@ -4697,7 +4697,7 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 	p4d_t *p4d;
 	vm_fault_t ret;
 
-#ifdef HERMIT_IPI_OPT_DEBUG
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
 	if(within_hermit_debug_range(vmf.address)){
 		pr_warn("%s, fault on hermit_debug_range 0x%lx \n", __func__, vmf.address);
 	}
@@ -5557,7 +5557,7 @@ void ptlock_free(struct page *page)
 // Hermit support
 
 void lockless_push_to_tlb(struct mm_struct *mm, unsigned long addr,
-			  int nr_ptes)
+			  int nr_ptes, unsigned int flags)
 {
 	pmd_t *pmd;
 
@@ -5570,5 +5570,5 @@ void lockless_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 
 	// ?? fix me ??
 	// Can this function guarantte loading the entry into TLB buffer
-	arch_push_to_tlb(mm, addr, pmd, nr_ptes);
+	arch_push_to_tlb(mm, addr, pmd, nr_ptes, flags);
 }

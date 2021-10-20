@@ -21,6 +21,7 @@
 // Hermit
 #include <asm/pgalloc.h>
 #include <linux/hermit.h>
+#include <linux/hermit_inline.h>
 
 
 #ifdef CONFIG_PARAVIRT
@@ -1318,24 +1319,41 @@ static inline pgd_t native_pfn_pgd(unsigned long page_nr, pgprot_t pgprot)
  * VMWare IPI, 
  * Pushing the fake pgd into cr3 register to let the hardware load the fake PTE into TLB.
  * 
+ * 
+ * Cost#1, the fake PTE may cause more page fault.
+ *	e.g., 
+ *	read addr#1; write addr#1; 
+ *	the read op inserts the fake pte w/o dirty bit and reset the pte entry in DRAM to null.
+ * 	The write op needs to set the dirty bit in the pte in both TLB and DRAM.
+ * 	The DRAM NULL pte triggers a page fault and clear all the cached p4d/pud/pmd entires.	
+ * 
  */
 void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
-		      pmd_t *pmd, int n_entries)
+		      pmd_t *pmd, int n_entries, unsigned int flags)
 {
 	pgd_t *s_pgd, *s_pgdp; // the secondary page talbe
 	p4d_t *s_p4d, *s_p4dp;
 	pud_t *s_pud, *s_pudp;
 	pmd_t *s_pmd, *s_pmdp;
 	pte_t *s_ptep, *s_pte, *ptep;
+	pte_t pte;
 	//epte_t *eptep;	// The extra information of PTE
 	bool restore_pgd, restore_p4d, restore_pud;
 	int i, cpu;
 	int first = 0;
 	int last = -1;
 	unsigned long start_addr;
-	pgprot_t pgprot = __pgprot(_PAGE_ACCESSED | _PAGE_RW | _PAGE_PRESENT |
-				   _PAGE_USER);  // how to know this page is user space ?
+
+	// how to know this page is user space ?
+	pgprot_t pgprot;
 	spinlock_t *ptl;
+
+	// is it necessary to set the non-pte entries dirty ?
+	if(flags & FAULT_FLAG_WRITE){
+		pgprot = __pgprot(_PAGE_ACCESSED | _PAGE_DIRTY | _PAGE_RW | _PAGE_PRESENT | _PAGE_USER);
+	}else{
+		pgprot = __pgprot(_PAGE_ACCESSED | _PAGE_RW | _PAGE_PRESENT | _PAGE_USER);
+	}
 
 	addr &= PAGE_MASK;
 	start_addr = addr;
@@ -1361,6 +1379,16 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	s_pudp = this_cpu_read(cpu_tlbstate.s_pudp);
 	s_p4dp = this_cpu_read(cpu_tlbstate.s_p4dp);
 	s_pgdp = this_cpu_read(cpu_tlbstate.s_pgdp);  // fake page  table, pgd start pointer
+
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+	//if (within_hermit_debug_range(addr)) {
+		pr_warn("%s, Retrieved the fake PageTable for core %d : \n\
+		s_pgdp 0x%lx, s_p4dp 0x%lx, s_pudp 0x%lx, s_pmdp 0x%lx, s_ptep 0x%lx \n",
+			__func__, smp_processor_id(), (size_t)s_pgdp,
+			(size_t)s_p4dp, (size_t)s_pudp, (size_t)s_pmdp,
+			(size_t)s_ptep);
+	//}
+#endif
 
 	s_pgd = s_pgdp + pgd_index(addr); // Calculate the fake pgd entry address.
 
@@ -1393,26 +1421,44 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	native_irq_disable();
 	//generation = atomic_read(&mm->flush_cnt);
 
-#ifdef HERMIT_IPI_OPT_DEBUG
-	if (within_hermit_debug_range(addr)) {
+#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
+	//if (within_hermit_debug_range(addr)) {
 		pr_warn("%s, core %d  page fault on 0x%lx,\n \
-	pte value 0x%lx, present? %x, young? %x, dirty? %x \n \
-	fake pgd 0x%lx, p4d 0x%lx pud 0x%lx, pmd 0x%lx \n \
-	page addr s_pgdp 0x%lx, s_p4dp 0x%lx,\n \
-	s_pudp 0x%lx, s_pmdp 0x%lx, \n \
-	s_ptep 0x%lx \n",
+		pte value 0x%lx, present? %x, young? %x, dirty? %x \n \
+		fake pgd 0x%lx, p4d 0x%lx pud 0x%lx,\n \
+		pmd 0x%lx,\n \
+		page addr s_pgdp 0x%lx, s_p4dp 0x%lx,\n \
+		s_pudp 0x%lx, s_pmdp 0x%lx, \n \
+		s_ptep 0x%lx \n\
+		pgtable_l5_enabled? %d\n",
 			__func__, cpu, addr, ptep->pte, pte_present(*ptep),
 			pte_young(*ptep), pte_dirty(*ptep), (size_t)s_pgd,
 			(size_t)s_p4d, (size_t)s_pud, (size_t)s_pmd,
 			(size_t)s_pgdp, (size_t)s_p4dp, (size_t)s_pudp,
-			(size_t)s_pmdp, (size_t)s_ptep);
-	}
+			(size_t)s_pmdp, (size_t)s_ptep, pgtable_l5_enabled());
+	//}
 #endif
 
 	for (i = 0, s_pte = s_ptep + pte_index(addr);
 	     i < n_entries;
 	     i++, addr += PAGE_SIZE, ptep++, s_pte++) {
-		pte_t pte = *ptep; // get  the pte value of the primary page table
+
+
+		// DEBUG
+		if(within_hermit_debug_range(addr - PAGE_SIZE)){
+			// do TLB should down
+			__flush_tlb_all();
+			// exchange the pte vlaue to previous page
+
+			pte = exchange_pte_val_to_previous(addr, pmd);
+
+			if(ptep->pte != pte.pte){
+				//exchanged, print the debug infor
+				print_pte_virtaddr_value(pte, addr - PAGE_SIZE, "prev_page");
+			}
+		}
+
+		// pte_t pte = *ptep; // get  the pte value of the primary page table
 		//epte_t epte = *eptep;
 
 		// Skip the pte or not ?
@@ -1433,6 +1479,8 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 
 		// prepare the pte value for the s_pte
 		// set the _PAGE_ACCESSED of this pte.
+		// pte is an temporary value, setting its ACCESS_BIT doesn't affect ptep's original val.
+		// [x] If this is write-fault, the original pte is already set dirty.
 		pte = pte_mkyoung(pte); 
 
 		// set the value of pte to s_pte
@@ -1449,12 +1497,14 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 #ifdef HERMIT_IPI_OPT_DEBUG
 		if (within_hermit_debug_range(addr)) {
 			pr_warn("%s, core #%d fault on 0x%lx,\n \
-		pushed fake pte addr 0x%lx, val 0x%lx ",
-				__func__, cpu, addr, (size_t)s_pte,
+			original pte 0x%lx,\n \
+			pushed fake pte addr 0x%lx,\n\
+			val 0x%lx ",
+				__func__, cpu, addr, ptep->pte, (size_t)s_pte,
 				(size_t)s_pte->pte);
 		}
 #endif
-	}
+	} // end of for, pushing fake pte
 
 	// unlock and unmap the ptep
 	// ?? fix me ??
@@ -1472,7 +1522,20 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	// implicit barrier ? 
 	// Load the fake pgd into cr3
 	native_load_cr3_no_invd(s_pgdp);
+
+	// resume the faulting virt address
 	addr = start_addr + first * PAGE_SIZE;
+
+
+	// Hermit debug
+	// Check the filled infor
+	
+	//exchanged, print the debug infor
+	// ?? fix me ??
+	// n_entries MUST be 1 
+	s_pte-=n_entries;
+	print_pte_virtaddr_value(*s_pte, addr, "cur_page");
+		
 
 	// Force TLB to load the pte entries by accessing them
 	for (i = first, s_pte = s_ptep + pte_index(addr);
@@ -1483,7 +1546,10 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 
 		stac();
 		kasan_disable_current();
-		__READ_ONCE(*(__user int *)addr);  // trigger PageTable walk
+		
+		//ACCESS_ONCE(*(__user int *)addr);  // trigger PageTable walk
+		READ_ONCE(*(__user int *)addr); 
+
 		kasan_enable_current();
 		clac();
 
@@ -1493,6 +1559,14 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 		// Assumption, when accessing this invalidate pte,
 		// hardware will clear the cached PageTable
 		native_set_pte(s_pte, native_make_pte(0));
+
+#ifdef HERMIT_IPI_OPT_DEBUG
+		if (within_hermit_debug_range(addr)) {
+			pr_warn("%s, core #%d read usr virt 0x%lx ",
+				__func__, cpu, addr);
+		}
+#endif
+
 	}
 	/* We can already release the lock */
 
@@ -1500,6 +1574,8 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	native_pmd_clear(s_pmd);
 	if (restore_pud)
 		native_pud_clear(s_pud);
+	if (restore_p4d)
+		native_p4d_clear(s_p4d);
 	if (restore_pgd)
 		native_pgd_clear(s_pgd);
 
@@ -1558,8 +1634,9 @@ int arch_init_sw_tlb(bool primary)
 
 	}
 
-#ifdef HERMIT_IPI_OPT_DEBUG_DETAIL
-	pr_warn("%s, allocate fake PageTable for core %d : \n	s_pgdp 0x%lx, s_p4dp 0x%lx, s_pudp 0x%lx, s_pmdp 0x%lx, s_ptep 0x%lx \n",
+#ifdef HERMIT_IPI_OPT_DEBUG
+	pr_warn("%s, allocate fake PageTable for core %d : \n\
+		s_pgdp 0x%lx, s_p4dp 0x%lx, s_pudp 0x%lx, s_pmdp 0x%lx, s_ptep 0x%lx \n",
 		__func__, smp_processor_id(), 
 		(size_t)this_cpu_read(cpu_tlbstate.s_pgdp),
 		(size_t)this_cpu_read(cpu_tlbstate.s_p4dp), 

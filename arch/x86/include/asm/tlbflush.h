@@ -291,7 +291,7 @@ extern void arch_tlbbatch_flush(struct arch_tlbflush_unmap_batch *batch);
 
 //
 // Hermit support
-void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr, pmd_t *pmd, int n_entries);
+void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr, pmd_t *pmd, int n_entries, unsigned int flags);
 
 extern int arch_init_sw_tlb(bool primary);
 extern void arch_deinit_sw_tlb(void);

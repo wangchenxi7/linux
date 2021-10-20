@@ -24,9 +24,7 @@
  */
 
 
-static inline int within_hermit_debug_range(size_t virt_addr){
-	return (virt_addr >= 0x400000000000UL ) && (virt_addr < 0x400200000000UL );
-}
+
 
 
 
