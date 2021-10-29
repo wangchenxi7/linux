@@ -97,6 +97,52 @@ pte_t ptep_clear_flush(struct vm_area_struct *vma, unsigned long address,
 		flush_tlb_page(vma, address);
 	return pte;
 }
+
+
+//
+// Hermit
+
+/**
+ * @brief epte based TLB flushing.
+ * 	the purpose is to save IPI interrupt.
+ * 	
+ * 	1) Utilize epte geenration information to filter uselsss TLB flushing.
+ * 	2) Utilize epte to filter useless cpu IPI
+ * 	and then
+ * 	clear pte and epte
+ * 
+ * @param vma 
+ * @param address 
+ * @param ptep 
+ * @return pte_t 
+ */
+pte_t hermit_ptep_clear_flush(struct vm_area_struct *vma, unsigned long address, pte_t *ptep)
+{
+	struct mm_struct *mm = (vma)->vm_mm;
+	pte_t pte;
+	epte_t epte;
+	bool need_flush;
+	int cpu = -1;
+
+	// clear pte and return the original pte and eptep value
+	pte = ptep_and_epte_get_and_clear(mm, address, ptep, &epte);
+	if (pte_accessible(mm, pte)) {
+		need_flush = pte_need_flush(mm, pte, epte, &cpu);
+		if (need_flush) {
+			if (cpu > 0) {
+				// path#1, IPI reduced TLB flushing
+				
+			} else {
+				// path#2, kernel default TLB flushing
+				// cpu selection is based on the process process scheduling
+				flush_tlb_page(vma, address);
+			}
+		} // need flush
+	} // accessible
+
+	return pte;
+}
+
 #endif
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE

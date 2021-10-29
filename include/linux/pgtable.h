@@ -381,6 +381,7 @@ static inline pte_t ptep_get_and_clear_full(struct mm_struct *mm,
 					    int full)
 {
 	pte_t pte;
+
 	pte = ptep_get_and_clear(mm, address, ptep);
 	return pte;
 }
@@ -1470,7 +1471,12 @@ int phys_mem_access_prot_allowed(struct file *file, unsigned long pfn,
 static inline void init_espfix_bsp(void) { }
 #endif
 
+// defined as weak function in init/main.c
 extern void __init pgtable_cache_init(void);
+
+// Hermit
+// For the software/extend pte entry
+extern struct kmem_cache *epgtable_cache;
 
 #ifndef __HAVE_ARCH_PFN_MODIFY_ALLOWED
 static inline bool pfn_modify_allowed(unsigned long pfn, pgprot_t prot)

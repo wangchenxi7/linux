@@ -44,6 +44,7 @@ static inline void pte_free_kernel(struct mm_struct *mm, pte_t *pte)
 	free_page((unsigned long)pte);
 }
 
+
 /**
  * __pte_alloc_one - allocate a page for PTE-level user page table
  * @mm: the mm_struct of the current context

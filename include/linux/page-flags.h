@@ -141,6 +141,9 @@ enum pageflags {
 #ifdef CONFIG_KASAN_HW_TAGS
 	PG_skip_kasan_poison,
 #endif
+	// Hermit
+	PG_has_eptes,
+
 	__NR_PAGEFLAGS,
 
 	/* Filesystems */
@@ -345,6 +348,12 @@ PAGEFLAG(Workingset, workingset, PF_HEAD)
 __PAGEFLAG(Slab, slab, PF_NO_TAIL)
 __PAGEFLAG(SlobFree, slob_free, PF_NO_TAIL)
 PAGEFLAG(Checked, checked, PF_NO_COMPOUND)	   /* Used by some filesystems */
+
+
+// Hermit
+// function name : PageHasEptes
+PAGEFLAG(HasEptes, has_eptes, PF_HEAD) TESTSCFLAG(HasEptes, has_eptes, PF_HEAD)
+	__CLEARPAGEFLAG(HasEptes, has_eptes, PF_HEAD)
 
 /* Xen */
 PAGEFLAG(Pinned, pinned, PF_NO_COMPOUND)
@@ -702,6 +711,9 @@ TESTPAGEFLAG_FALSE(TransTail)
 PAGEFLAG_FALSE(DoubleMap)
 	TESTSCFLAG_FALSE(DoubleMap)
 #endif
+
+
+
 
 /*
  * Check if a page is currently marked HWPoisoned. Note that this check is

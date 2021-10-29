@@ -28,10 +28,41 @@ void paravirt_tlb_remove_table(struct mmu_gather *tlb, void *table)
 
 gfp_t __userpte_alloc_gfp = GFP_PGTABLE_USER | PGTABLE_HIGHMEM;
 
+
+// Hermit
+// allocate a epte cache, 512 entries, for a pte entry
+static void pte_alloc_eptes(struct page *pte)
+{
+	pte->eptes = kmem_cache_alloc(epgtable_cache, __userpte_alloc_gfp);
+
+	if (pte->eptes != NULL)
+		SetPageHasEptes(pte);
+}
+
+// pgtable_t pte_alloc_one(struct mm_struct *mm)
+// {
+// 	return __pte_alloc_one(mm, __userpte_alloc_gfp);
+// }
+
+
+/**
+ * @brief Hermit. Allocate a page for a pmd entry. 512 ptes.
+ * 
+ * @param mm 
+ * @return pgtable_t 
+ */
 pgtable_t pte_alloc_one(struct mm_struct *mm)
 {
-	return __pte_alloc_one(mm, __userpte_alloc_gfp);
+	struct page *pte;
+	pte =  __pte_alloc_one(mm, __userpte_alloc_gfp);
+
+	if(!pte){
+		pte_alloc_eptes(pte);
+	}
+
+	return (pgtable_t)pte;
 }
+
 
 static int __init setup_userpte(char *arg)
 {
@@ -873,4 +904,24 @@ int pmd_free_pte_page(pmd_t *pmd, unsigned long addr)
 }
 
 #endif /* CONFIG_X86_64 */
+
+
+// Hermit
+
+// soft/extended pte slba cache.
+struct kmem_cache *epgtable_cache;
+
+// Override the function defined in init/main.c
+// the size of epte_t is 2 bytse,
+void __init pgtable_cache_init(void)
+{
+	epgtable_cache = kmem_cache_create("ExtendedPT_cache", sizeof(epte_t) * 512,
+					  sizeof(epte_t) * 512, 0, NULL);
+	if (epgtable_cache == NULL)
+		panic("Couldn't allocate pgtable caches");
+
+}
+
+
+
 #endif	/* CONFIG_HAVE_ARCH_HUGE_VMAP */

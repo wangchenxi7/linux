@@ -1057,6 +1057,7 @@ static inline pte_t ptep_get_and_clear_full(struct mm_struct *mm,
 					    int full)
 {
 	pte_t pte;
+
 	if (full) {
 		/*
 		 * Full address destruction in progress; paravirt does not

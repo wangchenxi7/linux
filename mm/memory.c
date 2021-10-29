@@ -87,7 +87,7 @@
 #include "internal.h"
 
 // Hermit
-#include <linux/hermit.h>
+#include <linux/hermit_inline.h>
 
 
 #if defined(LAST_CPUPID_NOT_IN_PAGE_FLAGS) && !defined(CONFIG_COMPILE_TEST)
@@ -1347,8 +1347,11 @@ again:
 				    details->check_mapping != page_rmapping(page))
 					continue;
 			}
-			ptent = ptep_get_and_clear_full(mm, addr, pte,
-							tlb->fullmm);
+			// ptent = ptep_get_and_clear_full(mm, addr, pte,
+			// 				tlb->fullmm);
+			// hermit
+			ptent =  ptep_and_epte_get_and_clear_full(mm, addr, pte, tlb->fullmm);
+
 			tlb_remove_tlb_entry(tlb, pte, addr);
 			if (unlikely(!page))
 				continue;
@@ -3068,7 +3071,9 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		 * mmu page tables (such as kvm shadow page tables), we want the
 		 * new page to be mapped directly into the secondary page table.
 		 */
-		set_pte_at_notify(mm, vmf->address, vmf->pte, entry);
+		//set_pte_at_notify(mm, vmf->address, vmf->pte, entry);
+		set_pte_at_tlb_notify(vma, vmf->address, vmf->pte, entry, true);
+
 		update_mmu_cache(vma, vmf->address, vmf->pte);
 		if (old_page) {
 			/*
@@ -3613,6 +3618,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 
 	/*
 	 * Back out if somebody else already faulted in this pte.
+	 * lock the pmd entry =>
 	 */
 	vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, vmf->address,
 			&vmf->ptl);
@@ -3650,7 +3656,10 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 		pte = pte_mkuffd_wp(pte);
 		pte = pte_wrprotect(pte);
 	}
-	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
+	//set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
+	// Hermit
+	set_pte_at_tlb(vma,vmf->address, vmf->pte, pte, true);
+
 	arch_do_swap_page(vma->vm_mm, vma, vmf->address, pte, vmf->orig_pte);
 	vmf->orig_pte = pte;
 
@@ -3690,6 +3699,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 	/* No need to invalidate - it was non-present before */
 	update_mmu_cache(vma, vmf->address, vmf->pte);
 unlock:
+	// inserted the pte into pagetable, unlock the pmd <=
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 out:
 	if (si)
@@ -3847,8 +3857,13 @@ unlock:
 	// 1) We have to wait the finish of update_mmu_cache
 	// 2) the parameter of pte_mkold is passing by value
 	// 3) For x86, set_pte_at is a safer choice then assign the value directly.
-	entry = pte_mkold(*vmf->pte);
-	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
+	// entry = pte_mkold(*vmf->pte);
+	// set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
+	if( unlikely(!set_pte_at_tlb(vma, vmf->address, vmf->pte, entry,  true)) ){
+		pr_warn("%s, virt addr 0x%lx epte initialization failed.\n",
+			__func__, vmf->address);
+	}
+
 
 	// we update the pte successfully, unlock and return.
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
@@ -4031,7 +4046,11 @@ void do_set_pte(struct vm_fault *vmf, struct page *page, unsigned long addr)
 		inc_mm_counter_fast(vma->vm_mm, mm_counter_file(page));
 		page_add_file_rmap(page, false);
 	}
-	set_pte_at(vma->vm_mm, addr, vmf->pte, entry);
+	
+	//set_pte_at(vma->vm_mm, addr, vmf->pte, entry);
+	// Hermit
+	set_pte_at_tlb(vma, addr, vmf->pte, entry, true);
+
 }
 
 /**
@@ -5555,6 +5574,7 @@ void ptlock_free(struct page *page)
 
 //
 // Hermit support
+//
 
 void lockless_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 			  int nr_ptes, unsigned int flags)
@@ -5571,4 +5591,66 @@ void lockless_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	// ?? fix me ??
 	// Can this function guarantte loading the entry into TLB buffer
 	arch_push_to_tlb(mm, addr, pmd, nr_ptes, flags);
+}
+
+
+
+static inline int vma_can_push_to_tlb(struct vm_area_struct *vma)
+{
+	return !(vma->vm_flags & (VM_LOCKED | VM_EXEC | VM_IO | VM_HUGETLB |
+				VM_HUGEPAGE | VM_PFNMAP));
+}
+
+/**
+ * @brief Prepare and insert the pte into pagetable.
+ * 
+ * @param vma : fault vma
+ * @param addr : the fault user virt addr
+ * @param ptep : the newly created pte pointer
+ * @param ptent : the newly created pte
+ * @param uncached : the first time access the page
+ * @return int :
+ * 	1 : success
+ * 	0 : failed. 
+ * 
+ * More explanaton
+ * 	error conditions : soem rare memory usage ?
+ * 
+ */
+int set_pte_at_tlb(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep,
+		    pte_t ptent, bool uncached)
+{
+	epte_t epte = ZERO_EPTE(0);
+	epte_t *eptep = get_eptep(ptep);
+	int r = 0;
+
+	/* can make decisions based on previous epte */
+	if (!eptep || !vma_can_push_to_tlb(vma) ||
+	    !arch_can_push_to_tlb(ptent))
+		goto finish;
+
+	if (uncached) {
+		// 1) the first time access this page
+		// Initialize the epte and clear the PAGE_ACCESS bit
+		ptent = epte_mk_uncached(ptent, &epte);
+	} else {
+		// 2) this page is already accessed by another core ?? 
+		// ?? fix me ??
+		// Should not reach here for now.
+		BUG_ON(1);
+
+		// pte_t oldpte = *ptep;
+
+		// epte = *eptep;
+		// ptent = epte_mk_reset(vma->vm_mm, ptent, &epte, oldpte, false);
+	}
+
+	r = 1; // success
+finish:
+	/* XXX: Open coded, since we know it is fine */
+	set_pte_at(vma->vm_mm, addr, ptep, ptent);
+	if (eptep)
+		__set_epte(eptep, epte);
+
+	return r;
 }

@@ -79,6 +79,9 @@
 
 #include "internal.h"
 
+// Hermit
+#include <linux/hermit_inline.h>
+
 static struct kmem_cache *anon_vma_cachep;
 static struct kmem_cache *anon_vma_chain_cachep;
 
@@ -620,6 +623,12 @@ void try_to_unmap_flush_dirty(void)
 		try_to_unmap_flush();
 }
 
+/**
+ * @brief Add more cpus into the batch flushing structure.
+ * 
+ * @param mm : the process needs to be flushed.
+ * @param writable : if the page is writable.
+ */
 static void set_tlb_ubc_flush_pending(struct mm_struct *mm, bool writable)
 {
 	struct tlbflush_unmap_batch *tlb_ubc = &current->tlb_ubc;
@@ -642,6 +651,39 @@ static void set_tlb_ubc_flush_pending(struct mm_struct *mm, bool writable)
 	if (writable)
 		tlb_ubc->writable = true;
 }
+
+
+/**
+ * @brief Hermit, record an entry for batch processing.
+ * 
+ * @param mm 
+ * @param writable 
+ */
+static void hermit_set_tlb_ubc_flush_pending(struct mm_struct *mm, bool writable, unsigned long address, int cpu)
+{
+	struct tlbflush_unmap_batch *tlb_ubc = &current->tlb_ubc;
+	tlb_ubc->flush_required = true; // need to do batch flushing.
+
+	/*
+	 * Ensure compiler does not re-order the setting of tlb_flush_batched
+	 * before the PTE is cleared.
+	 */
+	barrier();
+	mm->tlb_flush_batched = true;
+
+	/*
+	 * If the PTE was dirty then it's best to assume it's writable. The
+	 * caller must use try_to_unmap_flush_dirty() or try_to_unmap_flush()
+	 * before the page is queued for IO.
+	 */
+	if (writable)
+		tlb_ubc->writable = true;
+
+	// Record this page into TLB batch flushing info
+	hermit_arch_tlbbatch_add_flush_range(&tlb_ubc->arch, mm, address, cpu);
+
+}
+
 
 /*
  * Returns true if the TLB flush should be deferred to the end of a batch of
@@ -694,6 +736,12 @@ void flush_tlb_batched_pending(struct mm_struct *mm)
 static void set_tlb_ubc_flush_pending(struct mm_struct *mm, bool writable)
 {
 }
+
+static void hermit_set_tlb_ubc_flush_pending(struct mm_struct *mm, bool writable, unsigned long address, int cpu)
+{
+
+}
+
 
 static bool should_defer_flush(struct mm_struct *mm, enum ttu_flags flags)
 {
@@ -1397,6 +1445,8 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		.address = address,
 	};
 	pte_t pteval;
+	epte_t *eptep;
+	int cpu;
 	struct page *subpage;
 	bool ret = true;
 	struct mmu_notifier_range range;
@@ -1497,9 +1547,11 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		}
 
 		/* Nuke the page table entry. */
+		// LLC flushing is arch specific,
+		// x86 doesn't need this.
 		flush_cache_page(vma, address, pte_pfn(*pvmw.pte));
 		if (should_defer_flush(mm, flags)) {
-			/*
+			/* 1) delay and batch the TLB flushing.
 			 * We clear the PTE but do not flush so potentially
 			 * a remote CPU could still be writing to the page.
 			 * If the entry was previously clean then the
@@ -1507,11 +1559,24 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 			 * transition on a cached TLB entry is written through
 			 * and traps if the PTE is unmapped.
 			 */
-			pteval = ptep_get_and_clear(mm, address, pvmw.pte);
+			//pteval = ptep_get_and_clear(mm, address, pvmw.pte);
+			pteval = hermit_ptep_get_and_clear(mm, address, pvmw.pte);
 
-			set_tlb_ubc_flush_pending(mm, pte_dirty(pteval));
+			// Record the pending TLB flushing.
+			// In default, the TLB flushing granularity is all the entris of the same PCID on a core.
+			eptep = get_eptep(pvmw.pte);
+			if(pte_need_flush(mm, pteval, *eptep, &cpu)){
+				hermit_set_tlb_ubc_flush_pending(mm, pte_dirty(pteval),
+					address, cpu);
+			}
+
 		} else {
-			pteval = ptep_clear_flush(vma, address, pvmw.pte);
+			// 2) clear the pte and do TLB flushing right now.
+			// For a TLB shootdown local, do it right now.
+			// e.g., the process is fixed on a single cpu.
+			
+			//pteval = ptep_clear_flush(vma, address, pvmw.pte);
+			pteval = hermit_ptep_clear_flush(vma, address, pvmw.pte);
 		}
 
 		/* Move the dirty bit to the page. Now the pte is gone. */
@@ -1606,7 +1671,7 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 			}
 			dec_mm_counter(mm, MM_ANONPAGES);
 			inc_mm_counter(mm, MM_SWAPENTS);
-			swp_pte = swp_entry_to_pte(entry);
+			swp_pte = swp_entry_to_pte(entry); // create the swapped pte value
 			if (pte_soft_dirty(pteval))
 				swp_pte = pte_swp_mksoft_dirty(swp_pte);
 			if (pte_uffd_wp(pteval))

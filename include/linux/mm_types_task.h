@@ -84,6 +84,9 @@ struct tlbflush_unmap_batch {
 	 */
 	struct arch_tlbflush_unmap_batch arch;
 
+	// Hermit
+	struct hermit_tlbflush_unmap_batch hermit_batch;
+
 	/* True if a flush is needed. */
 	bool flush_required;
 

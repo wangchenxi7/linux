@@ -76,6 +76,8 @@ struct tlb_context {
  * 
  * What's the connection between tlb_state, current->active_mm and CR3 ?
  * 
+ * [?] each process has such a structure ?
+ * 
  */
 struct tlb_state {
 	/*
@@ -231,7 +233,7 @@ struct flush_tlb_info {
 	unsigned long		start;
 	unsigned long		end;
 	u64			new_tlb_gen;
-	unsigned int		initiating_cpu;
+	unsigned int		initiating_cpu; // ? what does this mean ?
 	u8			stride_shift;
 	u8			freed_tables;
 };
@@ -291,7 +293,7 @@ extern void arch_tlbbatch_flush(struct arch_tlbflush_unmap_batch *batch);
 
 //
 // Hermit support
-void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr, pmd_t *pmd, int n_entries, unsigned int flags);
+
 
 extern int arch_init_sw_tlb(bool primary);
 extern void arch_deinit_sw_tlb(void);
@@ -307,6 +309,93 @@ static inline int arch_can_push_to_tlb(pte_t pte)
 	return (pte_flags(pte) & (_PAGE_NX | _PAGE_USER | _PAGE_GLOBAL | _PAGE_PRESENT)) \
 		== (_PAGE_NX | _PAGE_USER | _PAGE_PRESENT);
 }
+
+// push a fake pte into TLB
+void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr, pmd_t *pmd, int n_entries, unsigned int flags);
+
+// Record pte for TLB batch flushing
+extern void hermit_arch_tlbbatch_add_flush_range(struct hermit_tlbflush_unmap_batch *batch,
+					struct mm_struct *mm, unsigned long address, int cpu);
+
+
+// Do the  TLB batch flusing operation
+extern void hermit_arch_tlbbatch_flush(struct hermit_tlbflush_unmap_batch *batch);
+
+// Do the TLB flushing operations according the flush_tlb_info
+extern void hermit_flush_tlb_mm_entries(struct flush_tlb_info *info);
+
+
+
+/**
+ * @brief Judge if we really need a TLB flush for the unmapping.
+ * 	In some situations, the corresponding TLB entries is already flushed
+ * 	and we can omit this one.
+ * @param mm 
+ * @param pte 
+ * @param epte 
+ * @param cpu 
+ * @return true 
+ * @return false 
+ */
+static inline bool pte_need_flush(struct mm_struct *mm, pte_t pte,
+				  epte_t epte, int *cpu)
+{
+	int cur_gen;
+
+	// default vlaue,  -1 means the pte is shared between cores.
+	// We need to send IPI to other cores
+	*cpu = -1;
+
+	if (pte_young(pte)) // the ACCESSED_BIT of this pte is set
+		return true; // a multi tlb flushing
+
+	// ?? fix me ??
+	// not support yet
+
+	// /* disabled - need on all, uncached - no need */
+	// if (epte.generation < EPTE_GEN_MIN)
+	// 	return epte.generation == EPTE_GEN_DISABLED;
+
+	// cur_gen = atomic_read(&mm->flush_cnt);
+	// if (epte.generation != cur_gen &&
+	//     next_flush_gen(epte.generation) != cur_gen)
+	// 	return false;
+
+	/* local to certain cpu */
+	*cpu = (int)epte.cpu_plus_one - 1; // a single TLB shootdown
+
+	return true;
+}
+
+
+
+
+static inline void set_flush_tlb_n_pages(struct flush_tlb_entry *entry,
+					 unsigned long n_pages)
+{
+	entry->n_pages = min_t(unsigned long, TLB_FLUSH_ALL_LEN, n_pages);
+}
+
+
+static inline void set_flush_tlb_entry_range(struct flush_tlb_entry *entry,
+				       unsigned long start, unsigned long end)
+{
+	entry->vpn = start >> PAGE_SHIFT;
+	set_flush_tlb_n_pages(entry, (end >> PAGE_SHIFT) - (start >> PAGE_SHIFT));
+}
+
+/* Each entry is either kernel, mm-specific or cpu-specific */
+static inline void set_flush_tlb_entry_mm(struct flush_tlb_entry *entry,
+					  struct mm_struct *mm)
+{
+	entry->mm = mm;
+	entry->kernel = 0;
+}
+
+
+// End of Hermit
+//
+
 
 #endif /* !MODULE */
 

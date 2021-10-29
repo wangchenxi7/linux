@@ -644,6 +644,22 @@ static inline void mmu_notifier_range_init_owner(
 	set_pte_at(___mm, ___address, __ptep, ___pte);			\
 })
 
+
+// Hermit
+// The uncached : always true.
+#define set_pte_at_tlb_notify(__vma, __address, __ptep, __pte, __cache_state)	\
+({									\
+	struct vm_area_struct *___vma = __vma;				\
+	struct mm_struct *___mm = ___vma->vm_mm;			\
+	unsigned long ___address = __address;				\
+	pte_t ___pte = __pte;						\
+	bool ___cache_state = __cache_state;				\
+									\
+	mmu_notifier_change_pte(___mm, ___address, ___pte);		\
+	set_pte_at_tlb(___vma, ___address, __ptep, ___pte, ___cache_state);	\
+})
+
+
 #else /* CONFIG_MMU_NOTIFIER */
 
 struct mmu_notifier_range {
@@ -742,6 +758,8 @@ static inline void mmu_notifier_subscriptions_destroy(struct mm_struct *mm)
 #define pmdp_huge_clear_flush_notify pmdp_huge_clear_flush
 #define pudp_huge_clear_flush_notify pudp_huge_clear_flush
 #define set_pte_at_notify set_pte_at
+// hermit
+#define set_pte_at_tlb_notify set_pte_at_tlb
 
 static inline void mmu_notifier_synchronize(void)
 {

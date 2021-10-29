@@ -44,6 +44,10 @@
 #include "internal.h"
 #include "pgalloc-track.h"
 
+// Hermit
+#include <linux/hermit_inline.h>
+
+
 #ifdef CONFIG_HAVE_ARCH_HUGE_VMALLOC
 static bool __ro_after_init vmap_allow_huge = true;
 
@@ -317,7 +321,9 @@ static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
 
 	pte = pte_offset_kernel(pmd, addr);
 	do {
-		pte_t ptent = ptep_get_and_clear(&init_mm, addr, pte);
+		//pte_t ptent = ptep_get_and_clear(&init_mm, addr, pte);
+		pte_t ptent = hermit_ptep_get_and_clear(&init_mm, addr, pte);
+
 		WARN_ON(!pte_none(ptent) && !pte_present(ptent));
 	} while (pte++, addr += PAGE_SIZE, addr != end);
 	*mask |= PGTBL_PTE_MODIFIED;

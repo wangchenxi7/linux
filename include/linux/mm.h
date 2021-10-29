@@ -3288,7 +3288,7 @@ static inline int seal_check_future_write(int seals, struct vm_area_struct *vma)
 // Hermit
 
 void lockless_push_to_tlb(struct mm_struct *mm, unsigned long addr, int nr_ptes, unsigned int flags);
-
+int set_pte_at_tlb(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep, pte_t ptent, bool uncached);
 
 int init_sw_tlb(bool primary);
 void deinit_sw_tlb(void);

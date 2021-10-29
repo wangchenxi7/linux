@@ -775,6 +775,8 @@ void __init __weak mem_encrypt_init(void) { }
 
 void __init __weak poking_init(void) { }
 
+// can be override in arch specific implementations
+// e.g., in arch/x86/mm/pgtable.c with CONFIG_X86_PAE
 void __init __weak pgtable_cache_init(void) { }
 
 bool initcall_debug;

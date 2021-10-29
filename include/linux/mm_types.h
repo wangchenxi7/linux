@@ -18,6 +18,10 @@
 
 #include <asm/mmu.h>
 
+
+// Hermit
+#include <linux/hermit.h>
+
 #ifndef AT_VECTOR_SIZE_ARCH
 #define AT_VECTOR_SIZE_ARCH 0
 #endif
@@ -154,7 +158,13 @@ struct page {
 		struct {	/* Page table pages */
 			unsigned long _pt_pad_1;	/* compound_head */
 			pgtable_t pmd_huge_pte; /* protected by page->ptl */
-			unsigned long _pt_pad_2;	/* mapping */
+			union{
+				unsigned long _pt_pad_2;	/* mapping ? what's this used for ?  */
+				//Hermit
+				// Store a pointer to the extendedPageTable page
+				epte_t *eptes;
+
+			};
 			union {
 				struct mm_struct *pt_mm; /* x86 pgds only */
 				atomic_t pt_frag_refcount; /* powerpc */

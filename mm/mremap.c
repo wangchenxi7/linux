@@ -30,6 +30,9 @@
 
 #include "internal.h"
 
+// Hermit
+#include <linux/hermit_inline.h>
+
 static pud_t *get_old_pud(struct mm_struct *mm, unsigned long addr)
 {
 	pgd_t *pgd;
@@ -180,7 +183,10 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 		if (pte_none(*old_pte))
 			continue;
 
-		pte = ptep_get_and_clear(mm, old_addr, old_pte);
+		//pte = ptep_get_and_clear(mm, old_addr, old_pte);
+		// hermit
+		pte = hermit_ptep_get_and_clear(mm, old_addr, old_pte);
+
 		/*
 		 * If we are remapping a valid PTE, make sure
 		 * to flush TLB before we drop the PTL for the
