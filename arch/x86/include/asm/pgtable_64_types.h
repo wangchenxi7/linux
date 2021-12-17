@@ -25,8 +25,11 @@ typedef struct { pteval_t pte; } pte_t;
 #define EPTE_GEN_MIN		(0x2)
 
 // VMWare IPI opt
-// 4 bytes
-// the purpose of this structure?
+// 8 bytes
+// sw_young : ? 
+// generation : identify if a full TLB flushing is necessary
+// cpu_plus_one : record the owner of this private pte.
+// val : ?
 typedef union {
 	struct {
 		unsigned short sw_young : 1;

@@ -30,6 +30,13 @@ void pte_alloc_eptes(struct page *pte)
 		SetPageHasEPTES(pte);
 }
 
+/**
+ * @brief Allocate a page for 512 PTE enties.
+ * 
+ * @param mm : Current process's mm_struct
+ * @param address : the faulting  user virtual address.
+ * @return pgtable_t 
+ */
 pgtable_t pte_alloc_one(struct mm_struct *mm, unsigned long address)
 {
 	struct page *pte;

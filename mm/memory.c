@@ -596,7 +596,7 @@ int __pte_alloc(struct mm_struct *mm, struct vm_area_struct *vma,
 	ptl = pmd_lock(mm, pmd);
 	if (likely(pmd_none(*pmd))) {	/* Has another populated it ? */
 		atomic_long_inc(&mm->nr_ptes);
-		pmd_populate(mm, pmd, new);
+		pmd_populate(mm, pmd, new);  // make the newly allocated pte page available
 		new = NULL;
 	}
 	spin_unlock(ptl);
@@ -2002,8 +2002,10 @@ static int set_pte_at_tlb(struct vm_area_struct *vma, unsigned long addr, pte_t 
 		goto finish;
 
 	if (uncached) {
+		// 1) the first time access this page
 		ptent = epte_mk_uncached(ptent, &epte);
 	} else {
+		// 2) this page is already accessed by another core ?? 
 		pte_t oldpte = *ptep;
 
 		epte = *eptep;

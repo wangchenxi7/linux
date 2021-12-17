@@ -504,9 +504,11 @@ pte_t *populate_extra_pte(unsigned long vaddr);
 
 static inline epte_t *get_eptep(pte_t *ptep)
 {
+	// Get the page struct containing the fake pte.
+	// its page->eptes[] points to all the softare pte.
 	struct page *page = virt_to_page((unsigned long)ptep);
 
-	if (!PageHasEPTES(page))  // what does this flag mean ?
+	if (!PageHasEPTES(page))  // check the filed is used as EPTE filed
 		return NULL;
 
 	return &page->eptes[((unsigned long)(ptep) & ~PAGE_MASK) / 8];
@@ -539,9 +541,9 @@ static inline epte_t epte_get_and_clear(pte_t *ptep)
 	eptep = get_eptep(ptep);
 	if (eptep) {
 		epte = *eptep;
-		__set_epte(eptep, ZERO_EPTE(0));
+		__set_epte(eptep, ZERO_EPTE(0)); // set the epte to empty
 	} else
-		epte = ZERO_EPTE(0);
+		epte = ZERO_EPTE(0); // return a newly created epte
 	return epte;
 }
 
@@ -889,7 +891,7 @@ static inline pte_t eptep_get_and_clear(struct mm_struct *mm,
 					unsigned long addr,
 					pte_t *ptep, epte_t *eptep)
 {
-	*eptep = epte_get_and_clear(ptep);
+	*eptep = epte_get_and_clear(ptep); // set the empty epte to the epte pointer
 	return ptep_get_and_clear(mm, addr, ptep);
 }
 

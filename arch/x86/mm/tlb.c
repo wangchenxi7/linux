@@ -120,7 +120,8 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	pud_t *s_pud, *s_pudp;
 	pmd_t *s_pmd, *s_pmdp;
 	pte_t *s_ptep, *s_pte, *ptep;
-	epte_t *eptep;	// ? the fake PTE ?
+	epte_t *eptep;	// Record the extra pte info
+	pte_t pte;
 	bool restore_pgd, restore_pud;
 	int i, cpu, generation;
 	int first = 0;
@@ -138,7 +139,9 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	preempt_disable();
 
 	ptep = pte_offset_map(pmd, addr);
-	eptep = get_eptep(ptep);  // page->epte , who filld this field ?
+	// page->epte , who filld this field ?
+	// what's  the mapping between the eptep and fake pte ?
+	eptep = get_eptep(ptep);
 	if (unlikely(!eptep)) {
 		pte_unmap(ptep);
 		goto out;
@@ -175,26 +178,26 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 
 	for (i = 0, s_pte = s_ptep + pte_index(addr); i < n_entries; i++, addr += PAGE_SIZE, ptep++, s_pte++, eptep++) {
 		
-		//pte_t pte = *ptep; // get  the pte value of the primary page table
+		pte = *ptep; // get  the pte value of the primary page table
 		
 		//
 		// Hermit debug
 		// do TLB should down
-		__flush_tlb_all();
-		// exchange the pte value to the previous
-		pte_t pte = exchange_pte_val_to_previous(addr, pmd);
-		if(ptep->pte != pte.pte){
-			//exchanged, print the debug infor
-			print_pte_virtaddr_value(pte, addr - PAGE_SIZE, "prev_page");
-		}
-
+		// __flush_tlb_all();
+		// // exchange the pte value to the previous
+		// pte_t pte = exchange_pte_val_to_previous(addr, pmd);
+		// if(ptep->pte != pte.pte){
+		// 	//exchanged, print the debug infor
+		// 	print_pte_virtaddr_value(pte, addr - PAGE_SIZE, "prev_page");
+		// }
 		// end of debug
-		
+		//
+
 		epte_t epte = *eptep;
 
 		// what does these check mean ?
 		// can push to tlb ?
-		// young ?
+		// 2) skip accessed pte, it's not core private
 		if (!arch_can_push_to_tlb(pte) || pte_young(pte) || epte.generation == EPTE_GEN_DISABLED) {
 			continue;
 		}
@@ -235,16 +238,17 @@ void arch_push_to_tlb(struct mm_struct *mm, unsigned long addr,
 	native_load_cr3_no_invd(s_pgdp); /* implicit barrier ? Load the fake pgd into cr3 */
 	addr = start_addr + first * PAGE_SIZE;
 
-
+	//
 	// Hermit debug
 	// Check the filled infor
 	
 	//exchanged, print the debug infor
 	// ?? fix me ??
 	// n_entries MUST be 1 
-	s_pte-=n_entries;
-	print_pte_virtaddr_value(*s_pte, addr, "cur_page");
-		
+	// s_pte-=n_entries;
+	// print_pte_virtaddr_value(*s_pte, addr, "cur_page");
+	// end of Hermit debug
+	//
 
 
 	// ? What is this loop for ?
@@ -351,7 +355,7 @@ static void ___flush_tlb(struct flush_tlb_entry *entries, int trace_event)
 
 	/* leaving-mm cases */
 	if (local) {
-		if (!current->mm) {
+		if (!current->mm) {  
 			leave_mm(cpu);
 			return;
 		}
@@ -509,6 +513,9 @@ static void flush_tlb_prolog(struct flush_tlb_info *info,
 		struct flush_tlb_entry *entry = &info->entries[i];
 		struct mm_struct *mm = entry->mm;
 
+		// Path#1,  what does this mean ?
+		// Kernel space ?
+		// trigger a TLB full flush
 		if (entry->kernel || !mm) {
 			/*
 			 * XXX: we could have hold a pointer to cpu_all_mask
@@ -519,27 +526,36 @@ static void flush_tlb_prolog(struct flush_tlb_info *info,
 			break;
 		}
 		/* If we already did all the tracking */
-		if (mm == last_mm)
+		if (mm == last_mm){
+			// Path#2, triggerred a TLB process level flush recently
 			continue;
+		}
 
 		if (entry->cpu_specific) {
+			// Path#3 TLB flush for a single core by using the epte.cpu_plus_one info
+			//
 			if (entry->cpu != cpu &&
 			    atomic_read(&mm->mm_count) <= 1)
-				entry->n_pages = TLB_FLUSH_ALL_LEN;
-
+				entry->n_pages = TLB_FLUSH_ALL_LEN; // ? flush all the pages ??
+			
+			// set the flush_tlb_info->cpumask via the epte.cpu_plus_one
 			__cpumask_set_cpu(entry->cpu, &info->cpumask);
 			continue;
 		}
 		if (mm) {
-			/*
+			/* Path #4, If reaching here, entry->cpu_specific is fase.
+			 * got all the cpumask from the mm_struct.
+			 * Flushing according to the process scheduling between cores.
+			 *
 			 * we should find even if mm_cpumask changes.
 			 * if a CPU joined, then we flush more than promised.
 			 * if a CPU left, then anyhow it flushed
+			 * 
 			 */
 			cpumask_or(&info->cpumask, mm_cpumask(mm),
-				   &info->cpumask);
+				   &info->cpumask); 
 
-			last_mm = mm;
+			last_mm = mm; // triggered a TLB process level flush
 		}
 	}
 }
@@ -557,6 +573,11 @@ static void flush_tlb_epilog(struct flush_tlb_info *info,
 	}
 }
 
+/**
+ * @brief Do the TLB batch flusing for the entry array.
+ * 
+ * @param info :  the structure recording the batch flushing information.
+ */
 void flush_tlb_mm_entries(struct flush_tlb_info *info)
 {
 	int cpu;
@@ -565,19 +586,24 @@ void flush_tlb_mm_entries(struct flush_tlb_info *info)
 		return;
 
 	BUG_ON(!info->entries);
-	info->entries[info->n_entries - 1].last = 1;
+	info->entries[info->n_entries - 1].last = 1; // what does this field mean ?
 
 	preempt_disable();
 
 	cpu = smp_processor_id();
+
+	// Gather the core information need to flush
 	flush_tlb_prolog(info, cpu);
 
 	if (cpumask_test_cpu(cpu, &info->cpumask))
-		___flush_tlb(info->entries, TLB_LOCAL_MM_SHOOTDOWN);
+		___flush_tlb(info->entries, TLB_LOCAL_MM_SHOOTDOWN); // locally
 
+	// others cores, multi or single
+	// according to the value of the flush_tlb_info->cpumask
 	if (cpumask_any_but(&info->cpumask, cpu) < nr_cpu_ids)
 		flush_tlb_others(info);
 
+	
 	flush_tlb_epilog(info, cpu);
 
 	preempt_enable();

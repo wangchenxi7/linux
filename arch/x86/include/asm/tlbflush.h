@@ -403,10 +403,10 @@ static inline bool pte_need_flush(struct mm_struct *mm, pte_t pte,
 {
 	int cur_gen;
 
-	*cpu = -1;
+	*cpu = -1; // need to send IPI to other cores
 
-	if (pte_young(pte))
-		return true;
+	if (pte_young(pte)) // this pte is set ACCESSED_BIT
+		return true; // a multi tlb flushing
 
 	/* disabled - need on all, uncached - no need */
 	if (epte.generation < EPTE_GEN_MIN)
@@ -418,7 +418,7 @@ static inline bool pte_need_flush(struct mm_struct *mm, pte_t pte,
 		return false;
 
 	/* local to certain cpu */
-	*cpu = (int)epte.cpu_plus_one - 1;
+	*cpu = (int)epte.cpu_plus_one - 1; // a single TLB shootdown
 
 	return true;
 }
@@ -430,16 +430,35 @@ static void tlb_flush_out_of_space(struct flush_tlb_info *info)
 	info->n_entries = 1;
 	entry = &info->entries[0];
 
-	if (!info->same_mm)
+	if (!info->same_mm){
+		// #1, flush all the entire TLB ??
 		set_flush_tlb_entry_all_mm(entry);
-	else {
+	}else {
+		// #2, Flush all the entries of a specific process/mm
 		entry->cpu_specific = 0;
 		BUG_ON(!entry->mm);
 		BUG_ON(entry->kernel);
 	}
-	entry->n_pages = TLB_FLUSH_ALL_LEN;
+
+	// a full TLB flushing on the cpu
+	entry->n_pages = TLB_FLUSH_ALL_LEN; 
 }
 
+
+/**
+ * @brief Add an entry into the TLB batch flushing info's entry array.
+ * 	The logic :
+ * 	1) check if the entry's addr is covered in the batching records
+ * 	2) check if can merge the entry as an adjacent one.
+ * 	3) add the entry as a discret entry.
+ * 	4) if too many pages recorded, change to a full TLB flusing.
+ * @param info : structure to store the batch flushing entires. 
+ * @param mm 
+ * @param address : the fault address
+ * @param cpu :  
+ * 	-1 : the page is shared by multi-cores
+ * 	>=0 : a private entry.
+ */
 static inline void tlb_add_flush_range(struct flush_tlb_info *info,
 					 struct mm_struct *mm,
 					 unsigned long address,
@@ -447,36 +466,56 @@ static inline void tlb_add_flush_range(struct flush_tlb_info *info,
 {
 	struct flush_tlb_entry *entry;
 
-	/* make sure changes to the cpumask of mm are visible */
+	// make sure changes to the cpumask of mm are visible
+	// #1 The entry array is empty now,
+	// so, add the new fault pte into the entry array directly.
 	if (info->n_entries == 0)
 		goto new_entry;
 
+	// #2 too many pages, going to flush all the recorded unmapped ptes first ?
+	// should judge the info->n_entries and TLB_FLUSH_ALL_LEN instead ??
 	if (++info->n_pages > 33)
 		tlb_flush_out_of_space(info);
 
+	// #3, check if the entry is already covered, 
+	// or can be merged into last entry as adjacent one
 	entry = &info->entries[info->n_entries - 1];
 	if (!entry->mm) {
+		// what cause this error ??
 		BUG_ON(entry->cpu_specific);
 		return;
 	}
+
+	// #3.2 current entry records the unmapped pte for another process/mm
 	if (entry->mm != mm) {
-		BUG_ON(info->same_mm);
+		BUG_ON(info->same_mm); // void the same process setting
 		goto try_new_entry;
 	}
-	if (cpu >= 0 && entry->cpu_specific && entry->cpu != cpu)
+
+	// #3.3, the recorded pte is on owned by another cpu.
+	// in this case, do not merge the 2 unmapped ptes in the same entry.  
+	if (cpu >= 0 && entry->cpu_specific && entry->cpu != cpu){
 		goto try_new_entry;
+	}
+
+	//#3.4, a full TLB flush on the core.
 	if (entry->n_pages == TLB_FLUSH_ALL_LEN)
 		goto found_matching;
+
+	//3.5, adjacent unmapped pte flushing
+	// will this optimize the flushing speed ?
 	if (flush_tlb_entry_end(entry) == address)
 		goto found_adjacent;
 
-	/* Create new entry */
+	/* Create new entry for this unmapped pte*/
 try_new_entry:
+	// change to a full TLB flusing
 	if (info->n_entries == N_TLB_FLUSH_ENTRIES) {
 		tlb_flush_out_of_space(info);
 		return;
 	}
 new_entry:
+	// add the entry as a discrete entry
 	entry = &info->entries[info->n_entries++];
 	entry->vpn = address >> PAGE_SHIFT;
 	BUG_ON(get_flush_tlb_entry_addr(entry) != (address & PAGE_MASK));

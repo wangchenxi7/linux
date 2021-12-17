@@ -594,6 +594,17 @@ void try_to_unmap_flush_dirty(struct tlbflush_unmap_batch *tlb_ubc)
 		try_to_unmap_flush(tlb_ubc);
 }
 
+/**
+ * @brief Record a entry for batch TLB flusing.
+ * 
+ * @param mm : fault process's mm_struct
+ * @param address  : the fault virtual address
+ * @param writable : if the pte dirty flag setted
+ * @param tlb_ubc : structure used to record the batch TLB flusing.
+ * @param cpu : 
+ * 	-1 : multi tlb flusing
+ * 	>=0 : single TLB flusing on core#[cpu]
+ */
 static void set_tlb_ubc_flush_pending(struct mm_struct *mm,
 		unsigned long address, bool writable,
 		struct tlbflush_unmap_batch *tlb_ubc, int cpu)
@@ -631,7 +642,7 @@ static bool should_defer_flush(struct mm_struct *mm, enum ttu_flags flags)
 
 	return should_defer;
 }
-#else
+#else // if no CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
 static void set_tlb_ubc_flush_pending(struct mm_struct *mm,
 		unsigned long address, bool writable,
 		struct tlbflush_unmap_batch *tlb_ubc,
@@ -1444,7 +1455,9 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		}
   	}
 
-	/* Nuke the page table entry. */
+	// Nuke the page table entry.
+	// the LLC cache flush is arch specific.
+	// for X86, it's empty.
 	flush_cache_page(vma, address, page_to_pfn(page));
 	if (should_defer_flush(mm, flags)) {
 		int cpu = -1;
@@ -1462,10 +1475,11 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 
 		smp_mb__after_atomic();
 
-		if (pte_need_flush(mm, pteval, epte, &cpu))
+		if (pte_need_flush(mm, pteval, epte, &cpu)){
 			set_tlb_ubc_flush_pending(mm, address,
 						  pte_dirty(pteval),
 						  tlb_ubc, cpu);
+		}
 	} else {
 		pteval = eptep_clear_flush(vma, address, pte, &epte);
 	}

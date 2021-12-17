@@ -1374,11 +1374,15 @@ enum perf_event_task_context {
 	perf_nr_task_contexts,
 };
 
+
+// TLB batch flusing entry limit, 32 ?
 #define N_TLB_FLUSH_ENTRIES (32)
 
+// TLB batch flusing page limit, 1023 pages
 #define TLB_FLUSH_LEN_BITS	(PAGE_SHIFT - 2)
 #define TLB_FLUSH_ALL_LEN	((1<<TLB_FLUSH_LEN_BITS)-1)
 
+// ? 63 cpu max ?
 #define TLB_FLUSH_CPU_BITS	(63)
 
 struct flush_tlb_entry {
@@ -1395,10 +1399,14 @@ struct flush_tlb_entry {
 
 struct flush_tlb_info {
 	unsigned int n_entries;
-	unsigned short n_pages;
-	bool same_mm;
+	unsigned short n_pages; // for huge page ? n_pages != n_entries
+	bool same_mm;	// show if all the entries belong to a same mm/process
 	cpumask_t cpumask;
-	struct flush_tlb_entry entries[0];
+
+	// points to a variant size flush_tlb_entry array
+	// usually the adjacent memory size of this struct
+	// e.g., the __entries[N_TLB_FLUSH_ENTRIES]; of the struct flush_tlb_info_multi
+	struct flush_tlb_entry entries[0];  
 } __packed;
 
 struct flush_tlb_info_single {

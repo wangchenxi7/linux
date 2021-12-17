@@ -76,6 +76,7 @@ pte_t eptep_clear_flush(struct vm_area_struct *vma, unsigned long address,
 	struct mm_struct *mm = (vma)->vm_mm;
 	pte_t pte;
 
+	// clear and get the original value of pte and epte
 	pte = eptep_get_and_clear(mm, address, ptep, epte);
 
 	if (pte_accessible(mm, pte)) {
@@ -87,9 +88,9 @@ pte_t eptep_clear_flush(struct vm_area_struct *vma, unsigned long address,
 
 		if (need_flush) {
 			if (cpu >= 0)
-				flush_tlb_page_cpu(vma, address, cpu);
+				flush_tlb_page_cpu(vma, address, cpu); // single core TLB shootdown
 			else
-				flush_tlb_page(vma, address);
+				flush_tlb_page(vma, address);  // kernel default
 		}
 	}
 
